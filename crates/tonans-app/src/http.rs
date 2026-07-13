@@ -45,6 +45,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::clock;
+
 /// Longest request line (`GET /path HTTP/1.1`) accepted.
 const MAX_REQUEST_LINE: usize = 8 * 1024;
 /// Most headers accepted.
@@ -260,14 +262,14 @@ impl DeadlineStream {
     fn new(stream: TcpStream, allowance: Duration) -> Self {
         Self {
             stream,
-            deadline: Instant::now() + allowance,
+            deadline: clock::monotonic() + allowance,
         }
     }
 }
 
 impl Read for DeadlineStream {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        let remaining = self.deadline.saturating_duration_since(clock::monotonic());
         if remaining.is_zero() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -563,7 +565,7 @@ mod tests {
         let (mut client, server) = socket_pair();
         client.write_all(b"a").unwrap();
         let mut reader = BufReader::new(DeadlineStream::new(server, Duration::from_millis(25)));
-        let started = Instant::now();
+        let started = clock::monotonic();
         let mut two_bytes = [0u8; 2];
         let error = reader.read_exact(&mut two_bytes).unwrap_err();
 

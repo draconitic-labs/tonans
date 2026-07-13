@@ -1,10 +1,11 @@
 //! The only place in Tonans that reads a clock.
 //!
-//! `tonans-core` is deterministic: identical inputs must produce byte-identical
-//! outputs, forever, on any machine. A wall-clock read anywhere inside it would
-//! quietly break that, so `clippy.toml` bans `SystemTime::now` and `Instant::now`
-//! workspace-wide and this module is the single audited exception. Every timestamp
-//! in a project, an import, or a report was passed in from here.
+//! `tonans-core` keeps ambient time out of its numeric model: the same canonical
+//! inputs, model version, and supported build target must reproduce the same numeric
+//! `results_hash`. A wall-clock read inside it would quietly break that contract, so
+//! `clippy.toml` bans `SystemTime::now` and `Instant::now` workspace-wide and this
+//! module is the single audited exception. Every generated timestamp is passed in
+//! from here.
 //!
 //! If you find yourself wanting to call a clock somewhere else: don't. Take the
 //! instant as a parameter. The reason the determinism test can prove anything at
