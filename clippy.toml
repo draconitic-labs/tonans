@@ -1,0 +1,8 @@
+# tonans-core is a deterministic, clock-free library: identical inputs must
+# always produce byte-identical outputs. Wall-clock reads are therefore banned
+# workspace-wide and must be injected from the single audited call site in
+# tonans-app (see crates/tonans-app/src/clock.rs).
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "inject the clock instead; see crates/tonans-app/src/clock.rs" },
+    { path = "std::time::Instant::now", reason = "inject the clock instead; see crates/tonans-app/src/clock.rs" },
+]

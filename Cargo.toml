@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = ["crates/tonans-core", "crates/tonans-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Flintglade <support@flintglade.com>"]
+license = "LicenseRef-Flintglade-Tonans-Commercial"
+publish = false
+
+[workspace.dependencies]
+# Serialization of the versioned project schema, exports, and provenance manifests.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# RFC 4180 CSV parsing. Hand-rolled quoting/escaping is a defect source; the
+# importer's strictness lives in our code, not in the tokenizer.
+csv = "1.3"
+# Timestamp parsing and interval arithmetic. `clock` is deliberately NOT enabled:
+# tonans-core must contain no wall-clock access.
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "alloc"] }
+# IANA timezone database. Required to detect ambiguous and nonexistent local
+# times across DST transitions, which the importer must reject.
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
+# Input-file, project, and artifact hashing for the provenance manifest.
+sha2 = "0.10"
+# Error enum boilerplate for the machine-coded error taxonomy.
+thiserror = "2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# The engineering contract forbids shipped stubs and debug residue.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"

@@ -1,0 +1,37 @@
+[package]
+name = "tonans-app"
+description = "Tonans: a local-first deterministic microgrid scenario workbench. Loopback-only server with an embedded browser UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tonans"
+path = "src/main.rs"
+
+[dependencies]
+tonans-core = { path = "../tonans-core" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+
+# The operating system's CSPRNG, for the one-launch bearer token. The only source of
+# randomness in the workspace; `tonans-core` has none at all.
+#
+# Pinned to 0.2 deliberately. 0.3 reaches Windows' CSPRNG through a `raw-dylib`
+# import, which cannot be built by the `windows-gnu` toolchain without a full MinGW
+# binutils installation. 0.2 uses an ordinary import library, which the toolchain
+# already ships. See docs/ARCHITECTURE.md.
+getrandom = "0.2"
+
+# There is no HTTP framework here, and that is deliberate. See `src/http.rs`: Axum
+# would bring Tokio, Mio, and `windows-sys`, which is around sixty crates into the
+# dependency tree of a binary whose entire pitch is that you can audit it — all of it
+# to serve one user, on loopback, at human speed. The whole HTTP surface is three
+# hundred lines of `std::net` instead.
+
+[lints]
+workspace = true

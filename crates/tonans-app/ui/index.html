@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tonans — Microgrid Scenario Workbench</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/palette.css">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name">Tonans</span>
+    <span class="brand-sub">Microgrid Scenario Workbench</span>
+  </div>
+  <div class="topbar-meta">
+    <span id="tier-badge" class="badge">&nbsp;</span>
+    <span id="version-badge" class="muted mono"></span>
+    <button id="quit" class="ghost" type="button">Stop server</button>
+  </div>
+</header>
+
+<!--
+  The disclaimer lives in the markup, not in the script. If app.js fails to load,
+  the page must still say what this application is and is not.
+-->
+<div class="disclaimer" role="note">
+  <strong>Planning estimate for human review.</strong>
+  Tonans performs deterministic single-bus energy accounting. It is not an AC power-flow study, a
+  protection or interconnection analysis, a safety certification, or a guarantee of savings.
+  It never controls equipment. Results must be reviewed by a qualified engineer.
+</div>
+
+<noscript>
+  <div class="banner critical">This interface needs JavaScript. Tonans runs entirely on your machine
+    and loads no scripts from the network — the only script is the one served from this binary.</div>
+</noscript>
+
+<main class="shell">
+
+  <nav class="rail" aria-label="Projects">
+    <div class="rail-head">
+      <h2>Projects</h2>
+      <span id="workspace-path" class="mono tiny muted"></span>
+    </div>
+    <ul id="project-list" class="project-list"></ul>
+    <form id="new-project" class="new-project">
+      <label for="new-name">New project</label>
+      <input id="new-name" type="text" maxlength="64" placeholder="Warehouse 3" autocomplete="off" required>
+      <label for="new-timezone">Site timezone (IANA)</label>
+      <input id="new-timezone" type="text" maxlength="64" value="America/New_York" autocomplete="off" required>
+      <button type="submit" class="primary">Create</button>
+      <p id="entitlement-note" class="tiny muted"></p>
+    </form>
+  </nav>
+
+  <section class="work">
+    <div id="project-header" class="project-header hidden">
+      <h1 id="project-name"></h1>
+      <p id="project-summary" class="muted"></p>
+    </div>
+
+    <div id="tabs" class="tabs hidden" role="tablist">
+      <button class="tab" data-view="data" role="tab" type="button">1 · Data</button>
+      <button class="tab" data-view="scenarios" role="tab" type="button">2 · Scenarios</button>
+      <button class="tab" data-view="results" role="tab" type="button">3 · Results</button>
+      <button class="tab" data-view="sensitivity" role="tab" type="button">4 · Sensitivity</button>
+      <button class="tab" data-view="export" role="tab" type="button">5 · Export</button>
+    </div>
+
+    <div id="empty-state" class="empty">
+      <h1>Open a project, or create one.</h1>
+      <p class="muted">Tonans stores everything on this machine, in the workspace folder shown on the
+        left. Nothing is uploaded anywhere. There is no account and no telemetry.</p>
+      <p class="muted">A bundled demonstration project is installed on first launch. Its data is
+        <strong>synthetic</strong> — it is not a real site's meter export.</p>
+    </div>
+
+    <div id="view-data" class="view hidden"></div>
+    <div id="view-scenarios" class="view hidden"></div>
+    <div id="view-results" class="view hidden"></div>
+    <div id="view-sensitivity" class="view hidden"></div>
+    <div id="view-export" class="view hidden"></div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+<footer class="footer">
+  <span>Tonans by Flintglade — support@flintglade.com</span>
+  <span class="muted">Bound to loopback only. No telemetry, no remote assets, no device control.</span>
+</footer>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
