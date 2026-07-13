@@ -2,11 +2,22 @@
 
 **Status: not published, not for sale, and reserved for operator testing.**
 
-The numeric public-reference gate is closed. The current hardening branch has passed
-the code/test gates, but the final package, smoke, dependency, and fresh-review gates
-must be rerun after all release changes are integrated. The operator's real-browser
-DOM walkthrough remains pending. Evidence belongs to the exact artifact being
-considered for release; an earlier green run does not bless a later binary.
+The numeric public-reference gate and final integrated automated gates are closed for
+the exact operator-test artifact below. The operator's real-browser DOM walkthrough
+remains pending. Evidence belongs to the exact artifact being considered for release;
+an earlier green run does not bless a later binary.
+
+Verified 2026-07-13:
+
+- archive SHA-256: `da7809d611a517fa0081ea1ac42f50d5736d11fddc58a81d7b872bb3fdf8a3d8`;
+- runtime: `Tonans 0.1.0 (model 1.1.1, schema v1)`;
+- formatting, strict Clippy, 212 tests, and locked RustSec audit passed;
+- closed-package verifier passed 15/15 checks;
+- sanitized packaged-binary smoke passed 12/12 checks;
+- CycloneDX 1.5 JSON Schema validation passed with the official SPDX and JSF schemas;
+- Grok 4.5 maximum reasoning and an independent fresh-context Codex review both
+  returned GO for the exact reviewed source and archive digest; and
+- Authenticode status is intentionally `NotSigned` for this private operator test.
 
 Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 
