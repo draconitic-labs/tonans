@@ -105,9 +105,19 @@ Write-Host "Smoke-testing $(Split-Path -Leaf $Zip)" -ForegroundColor Cyan
 Write-Host "  isolated workspace: $workspaceDir"
 
 $process = $null
+$originalPath = $env:PATH
 try {
     Expand-Archive -Path $Zip -DestinationPath $appDir -Force
     $exe = Join-Path $appDir 'Tonans.exe'
+
+    # A release smoke test must not succeed because the build toolchain happens to
+    # carry a DLL that the package forgot. Restrict child-process DLL resolution to
+    # Windows system directories and run from the extracted application directory.
+    $env:PATH = @(
+        (Join-Path $env:SystemRoot 'System32')
+        $env:SystemRoot
+        (Join-Path $env:SystemRoot 'System32\Wbem')
+    ) -join ';'
 
     $stdout = Join-Path $work 'stdout.txt'
     $stderr = Join-Path $work 'stderr.txt'
@@ -116,6 +126,7 @@ try {
     # --port 0:     the kernel picks, which is what a real launch does.
     $process = Start-Process -FilePath $exe `
         -ArgumentList @('--no-browser', '--port', '0', '--workspace', $workspaceDir) `
+        -WorkingDirectory $appDir `
         -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
     # `Start-Process -PassThru` does not keep the process handle open, and without the
@@ -230,7 +241,8 @@ try {
         # have been written next to the binary.
         $strays = @(Get-ChildItem $appDir -Recurse -File | Where-Object { $_.Name -notin @(
             'Tonans.exe', 'README.md', 'LICENSE.md', 'TERMS.md', 'NOTICES.md',
-            'PRIVACY.md', 'SECURITY.md', 'MODEL.md', 'SBOM.cdx.json', 'SHA256SUMS.txt') })
+            'PRIVACY.md', 'SECURITY.md', 'MODEL.md', 'BENCHMARK.md',
+            'SBOM.cdx.json', 'SHA256SUMS.txt') })
         if ($strays) { 'the application wrote next to its binary: ' + (($strays | ForEach-Object { $_.Name }) -join ', ') }
     }
 
@@ -261,6 +273,7 @@ try {
         # argument containing a space has to carry its own quotes -- otherwise the
         # demo project's name arrives as four separate arguments.
         $runner = Start-Process -FilePath $exe -PassThru -NoNewWindow -Wait `
+            -WorkingDirectory $appDir `
             -ArgumentList @('run',
                             '--project', '"Demo - Riverside Works"',
                             '--workspace', "`"$workspaceDir`"",
@@ -308,6 +321,7 @@ try {
     }
 
 } finally {
+    $env:PATH = $originalPath
     if ($process -and -not $process.HasExited) {
         Write-Host '  (stopping the process: it did not exit on its own)' -ForegroundColor Yellow
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue

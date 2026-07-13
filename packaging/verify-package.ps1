@@ -46,6 +46,7 @@ $Payload = @(
     'PRIVACY.md'
     'SECURITY.md'
     'MODEL.md'
+    'BENCHMARK.md'
     'SBOM.cdx.json'
     'SHA256SUMS.txt'
 )
@@ -53,6 +54,12 @@ $Payload = @(
 # The published identity. Anything else that looks like a person is a failure.
 $AllowedEmail = 'support@flintglade.com'
 $AllowedCompany = 'Flintglade'
+$AllowedBenchmarkUrls = @(
+    'https://github.com/NatLabRockies/ssc/tree/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832'
+    'https://github.com/NatLabRockies/ssc/blob/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832/test/shared_test/lib_battery_capacity_test.h#L69-L90'
+    'https://github.com/NatLabRockies/ssc/blob/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832/test/shared_test/lib_battery_capacity_test.cpp#L47-L71'
+    'https://github.com/NatLabRockies/ssc/blob/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832/test/shared_test/lib_battery_capacity_test.h#L43-L52'
+)
 
 $script:Failures = @()
 function Check($name, [scriptblock] $body) {
@@ -227,6 +234,7 @@ try {
             foreach ($m in [regex]::Matches($content, 'https?://[^\s)"''>`]+')) {
                 $url = $m.Value
                 if ($url -match '^https?://(127\.0\.0\.1|localhost)') { continue }
+                if ($file.Name -eq 'BENCHMARK.md' -and $url -in $AllowedBenchmarkUrls) { continue }
                 $offenders += "$($file.Name): $url"
             }
         }
@@ -238,7 +246,7 @@ try {
         # every origin in it must belong to a licence steward. A Flintglade-controlled
         # origin appearing here would be smuggling exactly what that exemption exists
         # to permit.
-        $stewards = @('apache.org', 'opensource.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org')
+        $stewards = @('apache.org', 'opensource.org', 'unlicense.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org')
         $offenders = @()
         $content = Get-Content (Join-Path $work 'NOTICES.md') -Raw
         foreach ($m in [regex]::Matches($content, 'https?://([^/\s)"''>`]+)')) {
@@ -253,6 +261,40 @@ try {
     Check 'the binary binds only loopback' {
         $content = [System.IO.File]::ReadAllText($exe, [System.Text.Encoding]::GetEncoding('iso-8859-1'))
         if ($content -match '0\.0\.0\.0') { 'the binary contains the string 0.0.0.0' }
+    }
+
+    Check 'the PE imports only Windows system libraries and no libunwind' {
+        $objdump = Get-Command 'llvm-objdump.exe' -ErrorAction SilentlyContinue
+        if (-not $objdump) { $objdump = Get-Command 'llvm-objdump' -ErrorAction SilentlyContinue }
+        if (-not $objdump) { return 'llvm-objdump is required to inspect the release executable imports' }
+
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $dump = @(& $objdump.Source -p $exe 2>&1)
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($code -ne 0) { return "llvm-objdump exited $code" }
+
+        $imports = @($dump | ForEach-Object {
+            if ($_ -match '^\s*DLL Name:\s*(\S+)\s*$') { $Matches[1].ToLowerInvariant() }
+        } | Where-Object { $_ } | Sort-Object -Unique)
+        if (-not $imports) { return 'llvm-objdump reported no imported DLLs' }
+        if ($imports -contains 'libunwind.dll') { return 'libunwind.dll is dynamically imported' }
+
+        $allowed = @(
+            'advapi32.dll', 'bcrypt.dll', 'crypt32.dll', 'gdi32.dll',
+            'kernel32.dll', 'msvcrt.dll', 'ntdll.dll', 'ole32.dll',
+            'shell32.dll', 'user32.dll', 'userenv.dll', 'ws2_32.dll'
+        )
+        $unexpected = @($imports | Where-Object {
+            $_ -notin $allowed -and
+            $_ -notlike 'api-ms-win-core-*.dll' -and
+            $_ -notlike 'api-ms-win-crt-*.dll'
+        })
+        if ($unexpected) { "non-system DLL import(s): $($unexpected -join ', ')" }
     }
 
     # -----------------------------------------------------------------------
@@ -300,17 +342,76 @@ try {
     # -----------------------------------------------------------------------
     # 6. The SBOM describes this build
     # -----------------------------------------------------------------------
-    Check 'the SBOM is well-formed and lists the shipped crates' {
+    Check 'the SBOM is semantically complete and lists the shipped crates' {
         $bom = Get-Content (Join-Path $work 'SBOM.cdx.json') -Raw | ConvertFrom-Json
         $problems = @()
         if ($bom.bomFormat -ne 'CycloneDX') { $problems += "bomFormat is '$($bom.bomFormat)'" }
-        if (-not $bom.specVersion) { $problems += 'no specVersion' }
-        if ($bom.metadata.component.publisher -ne $AllowedCompany) { $problems += "publisher is '$($bom.metadata.component.publisher)'" }
+        if ($bom.specVersion -ne '1.5') { $problems += "specVersion is '$($bom.specVersion)', expected 1.5" }
+        if ([int]$bom.version -lt 1) { $problems += "serial version is '$($bom.version)'" }
+
+        $cargoToml = Get-Content (Join-Path $RepoRoot 'Cargo.toml') -Raw
+        if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+            $problems += 'cannot read the workspace version'
+            $expectedVersion = $null
+        } else {
+            $expectedVersion = $Matches[1]
+        }
+        $root = $bom.metadata.component
+        if ($root.type -ne 'application') { $problems += "root type is '$($root.type)'" }
+        if ($root.name -ne 'Tonans') { $problems += "root name is '$($root.name)'" }
+        if ($expectedVersion -and $root.version -ne $expectedVersion) { $problems += "root version is '$($root.version)', expected $expectedVersion" }
+        if ($root.publisher -ne $AllowedCompany) { $problems += "publisher is '$($root.publisher)'" }
+        if ($expectedVersion -and $root.purl -ne "pkg:cargo/tonans@$expectedVersion") { $problems += "root purl is '$($root.purl)'" }
+        $rootLicenses = @($root.licenses)
+        if ($rootLicenses.Count -ne 1 -or
+            -not ($rootLicenses[0].PSObject.Properties.Name -contains 'expression') -or
+            $rootLicenses[0].expression -ne 'LicenseRef-Flintglade-Tonans-Commercial') {
+            $problems += 'root license is not the commercial LicenseRef expression'
+        }
+
         if (@($bom.components).Count -lt 10) { $problems += "only $(@($bom.components).Count) components -- the tree is bigger than that" }
+        $refs = @{}
+        $componentPairs = @()
         foreach ($component in $bom.components) {
             if (-not $component.name -or -not $component.version) { $problems += 'a component has no name or version' }
+            if ($component.type -ne 'library') { $problems += "$($component.name) has type '$($component.type)'" }
+            if ($component.scope -ne 'required') { $problems += "$($component.name) has scope '$($component.scope)'" }
+            $expectedPurl = "pkg:cargo/$($component.name)@$($component.version)"
+            if ($component.purl -ne $expectedPurl) { $problems += "$($component.name) has purl '$($component.purl)'" }
+            if ($component.'bom-ref' -ne $expectedPurl) { $problems += "$($component.name) has bom-ref '$($component.'bom-ref')'" }
+            if ($refs.ContainsKey($component.'bom-ref')) { $problems += "duplicate bom-ref '$($component.'bom-ref')'" } else { $refs[$component.'bom-ref'] = $true }
+
+            $choices = @($component.licenses)
+            if ($choices.Count -ne 1 -or -not ($choices[0].PSObject.Properties.Name -contains 'expression')) {
+                $problems += "$($component.name) has no single license expression"
+            } else {
+                $expression = [string]$choices[0].expression
+                if (-not $expression.Trim() -or $expression -eq 'see repository') { $problems += "$($component.name) has no declared license" }
+                if ($expression -in @('MIT/Apache-2.0', 'Unlicense/MIT')) { $problems += "$($component.name) has an unnormalized license expression '$expression'" }
+            }
+            $componentPairs += "$($component.name)|$($component.version)"
+        }
+
+        $noticePairs = @()
+        foreach ($line in (Get-Content (Join-Path $work 'NOTICES.md'))) {
+            if ($line -match '^\| ([^|]+) \| ([^|]+) \|') {
+                if ($Matches[1].Trim() -eq 'Component') { continue }
+                $noticePairs += "$($Matches[1].Trim())|$($Matches[2].Trim())"
+            }
+        }
+        $componentPairs = @($componentPairs | Sort-Object -Unique)
+        $noticePairs = @($noticePairs | Sort-Object -Unique)
+        if (Compare-Object $componentPairs $noticePairs) {
+            $problems += 'SBOM components do not match the NOTICES component table'
         }
         if ($problems) { $problems -join '; ' }
+    }
+
+    Check 'the bundled notices include siphasher COPYING' {
+        $notices = Get-Content (Join-Path $work 'NOTICES.md') -Raw
+        if ($notices -notmatch '(?m)^## COPYING \(as shipped with siphasher ') {
+            'siphasher COPYING is absent'
+        }
     }
 
     Check 'the package states that it is unsigned and unpublished' {

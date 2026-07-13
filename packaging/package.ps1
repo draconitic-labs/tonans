@@ -54,6 +54,7 @@ $Payload = @(
     'PRIVACY.md'
     'SECURITY.md'
     'MODEL.md'
+    'BENCHMARK.md'
     'SBOM.cdx.json'
     'SHA256SUMS.txt'
 )
@@ -105,6 +106,9 @@ if (-not $SkipBuild) {
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
     $remaps = @(
         '-C target-feature=+crt-static'
+        '-C link-arg=-Wl,-Bstatic'
+        '-C link-arg=-lunwind'
+        '-C link-arg=-Wl,-Bdynamic'
         "--remap-path-prefix=$cargoHome=/cargo"
         "--remap-path-prefix=$RepoRoot=/tonans"
         "--remap-path-prefix=$($env:USERPROFILE)=/home"
@@ -141,6 +145,7 @@ Copy-Item (Join-Path $RepoRoot 'TERMS.md') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\PRIVACY.md') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\SECURITY.md') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\MODEL.md') $StageDir
+Copy-Item (Join-Path $RepoRoot 'docs\BENCHMARK.md') $StageDir
 
 # ---------------------------------------------------------------------------
 # SBOM and notices, from the locked dependency graph
@@ -200,7 +205,14 @@ $thirdParty = @()
 foreach ($id in $shippedIds) {
     $package = $packagesById[$id]
     if ($workspaceIds -contains $id) { continue }
-    $license = if ($package.license) { $package.license } else { 'see repository' }
+    if (-not $package.license) {
+        Fail "shipped crate $($package.name) $($package.version) declares no license"
+    }
+    $license = switch ($package.license) {
+        'MIT/Apache-2.0' { 'MIT OR Apache-2.0' }
+        'Unlicense/MIT' { 'Unlicense OR MIT' }
+        default { $package.license }
+    }
     $components += [pscustomobject]@{
         type      = 'library'
         'bom-ref' = "pkg:cargo/$($package.name)@$($package.version)"
@@ -239,7 +251,7 @@ $bom = [ordered]@{
             version   = $Version
             purl      = "pkg:cargo/tonans@$Version"
             publisher = 'Flintglade'
-            licenses  = @(@{ license = @{ id = 'LicenseRef-Flintglade-Tonans-Commercial' } })
+            licenses  = @(@{ expression = 'LicenseRef-Flintglade-Tonans-Commercial' })
             description = 'Local-first deterministic microgrid scenario workbench.'
         }
         # No timestamp: it would make two packagings of identical inputs differ,
@@ -276,7 +288,13 @@ foreach ($crate in $thirdParty) {
 # "MIT OR Apache-2.0" and shipping forty identical copies helps nobody.
 $seenLicenceText = @{}
 foreach ($crate in $thirdParty) {
-    foreach ($file in (Get-ChildItem -Path $crate.ManifestDir -Filter 'LICENSE*' -File -ErrorAction SilentlyContinue)) {
+    $licenceFiles = @(Get-ChildItem -Path $crate.ManifestDir -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like 'LICENSE*' -or
+        $_.Name -like 'COPYING*' -or
+        $_.Name -like 'NOTICE*' -or
+        $_.Name -like 'UNLICENSE*'
+    } | Sort-Object Name)
+    foreach ($file in $licenceFiles) {
         $text = (Get-Content $file.FullName -Raw).Trim()
         $key = [System.BitConverter]::ToString(
             [System.Security.Cryptography.SHA256]::Create().ComputeHash(

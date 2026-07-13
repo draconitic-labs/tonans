@@ -10,7 +10,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// economics can alter a numeric result for an unchanged input. UI-only or
 /// documentation-only releases leave it untouched, which lets a reader of an old
 /// report know whether today's build would still reproduce it.
-pub const MODEL_VERSION: &str = "1.0.0";
+pub const MODEL_VERSION: &str = "1.1.0";
 
 /// Version of the on-disk project schema. See [`crate::schema`].
 pub const SCHEMA_VERSION: u32 = 1;
