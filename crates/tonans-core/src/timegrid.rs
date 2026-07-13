@@ -34,9 +34,11 @@ impl IntervalGrid {
     /// [`limits::MAX_INTERVAL_MINUTES`], durations that do not divide an hour,
     /// and interval counts past [`limits::MAX_INTERVALS`].
     ///
-    /// The "divides an hour" rule is what makes monthly demand bucketing
-    /// unambiguous: every interval falls wholly inside one local hour, so it
-    /// falls wholly inside one local month.
+    /// Dividing an hour is necessary but not sufficient for unambiguous monthly
+    /// demand bucketing: a few IANA zones change their UTC offset by a fraction of
+    /// an hour. Every boundary in the requested span is therefore checked against
+    /// the local clock as well, so no accepted interval can straddle a local tariff
+    /// hour or month.
     pub fn new(
         start_utc: DateTime<Utc>,
         interval_minutes: u32,
@@ -84,11 +86,32 @@ impl IntervalGrid {
                 ),
             ));
         }
-        let local_start = start_utc.with_timezone(&timezone);
-        if local_start.second() != 0
-            || local_start.nanosecond() != 0
-            || local_start.minute() % interval_minutes != 0
+        let span_minutes = i64::from(interval_minutes)
+            * i64::try_from(count).map_err(|_| {
+                Error::validation(
+                    "validation.interval_span",
+                    "dataset.interval_count",
+                    "the interval count cannot be represented as a time span",
+                )
+            })?;
+        if start_utc
+            .checked_add_signed(TimeDelta::minutes(span_minutes))
+            .is_none()
         {
+            return Err(Error::validation(
+                "validation.interval_span",
+                "dataset.start_utc",
+                "the dataset end would fall outside the supported timestamp range",
+            ));
+        }
+        let grid = Self {
+            start_utc,
+            interval_minutes,
+            count,
+            timezone,
+        };
+        let local_start = start_utc.with_timezone(&timezone);
+        if !is_local_boundary(&local_start, interval_minutes) {
             return Err(Error::validation(
                 "validation.interval_start_alignment",
                 "dataset.start_utc",
@@ -100,12 +123,24 @@ impl IntervalGrid {
                 ),
             ));
         }
-        Ok(Self {
-            start_utc,
-            interval_minutes,
-            count,
-            timezone,
-        })
+        for index in 1..=count {
+            let local = grid.start_of(index).with_timezone(&timezone);
+            if !is_local_boundary(&local, interval_minutes) {
+                return Err(Error::validation(
+                    "validation.interval_timezone_alignment",
+                    "dataset.interval_grid",
+                    format!(
+                        "interval boundary {index} lands at {} in {timezone}, which is not aligned \
+                         to the {interval_minutes}-minute local clock after a timezone-offset \
+                         transition. Use a shorter interval that remains locally aligned, or \
+                         provide a span that does not cross this transition, so an interval cannot \
+                         straddle a tariff hour or month.",
+                        local.to_rfc3339()
+                    ),
+                ));
+            }
+        }
+        Ok(grid)
     }
 
     /// Interval duration in hours. The conversion factor between kW and kWh.
@@ -193,14 +228,18 @@ impl IntervalGrid {
 
     /// The local calendar month containing interval `index`, as `(year, month)`.
     ///
-    /// Used to bucket demand charges. Because every interval divides an hour, and
-    /// timezone offsets change only on hour boundaries in every zone in the IANA
-    /// database, an interval never straddles two local months.
+    /// Used to bucket demand charges. Construction verifies every boundary against
+    /// the site's local clock, including across fractional-hour offset changes, so
+    /// an accepted interval never straddles two local months.
     #[must_use]
     pub fn local_month_of(&self, index: usize) -> (i32, u32) {
         let local = self.start_of(index).with_timezone(&self.timezone);
         (local.year(), local.month())
     }
+}
+
+fn is_local_boundary(local: &DateTime<Tz>, interval_minutes: u32) -> bool {
+    local.second() == 0 && local.nanosecond() == 0 && local.minute() % interval_minutes == 0
 }
 
 /// Convert a naive local timestamp to UTC, refusing to guess.
@@ -323,6 +362,19 @@ mod tests {
     }
 
     #[test]
+    fn a_fractional_hour_dst_shift_may_not_break_later_local_boundaries() {
+        // Lord Howe advances by thirty minutes at this transition. A fixed
+        // sixty-minute UTC cadence that begins at local midnight therefore lands
+        // on 02:30 after the change and can no longer be assigned wholly to local
+        // tariff hours. Thirty-minute intervals remain aligned and are accepted.
+        let start = utc(2024, 10, 5, 13, 30); // 2024-10-06 00:00 +10:30
+        let error = IntervalGrid::new(start, 60, 4, chrono_tz::Australia::Lord_Howe).unwrap_err();
+        assert_eq!(error.code(), "validation.interval_timezone_alignment");
+        assert!(error.to_string().contains("02:30:00"));
+        assert!(IntervalGrid::new(start, 30, 8, chrono_tz::Australia::Lord_Howe).is_ok());
+    }
+
+    #[test]
     fn intervals_must_divide_an_hour() {
         let start = utc(2024, 1, 1, 0, 0);
         assert!(IntervalGrid::new(start, 7, 10, chrono_tz::UTC).is_err());
@@ -351,6 +403,13 @@ mod tests {
                 .code(),
             "limit.intervals"
         );
+    }
+
+    #[test]
+    fn a_grid_span_may_not_overflow_the_supported_timestamp_range() {
+        let start = DateTime::<Utc>::MAX_UTC - TimeDelta::minutes(30);
+        let error = IntervalGrid::new(start, 60, 2, chrono_tz::UTC).unwrap_err();
+        assert_eq!(error.code(), "validation.interval_span");
     }
 
     #[test]

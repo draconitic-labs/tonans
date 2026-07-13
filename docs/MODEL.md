@@ -20,6 +20,10 @@ planning result can be reviewed rather than accepted as a black box.
 ## Time and units
 
 Time is an exact fixed grid: explicit timezone, interval duration, start, and count.
+Every boundary must remain aligned to the declared local-clock interval across the
+full span. A fractional-hour timezone transition that would move a later boundary
+off that grid is refused rather than allowing an interval to straddle a tariff hour
+or local calendar month.
 The duration must divide an hour. Every imported timestamp must land exactly on that
 grid; gaps are refused unless the user selects a bounded synthesis policy, and any
 synthesis remains visible as a critical warning.
