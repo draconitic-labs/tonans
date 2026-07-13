@@ -1,184 +1,219 @@
 # The model
 
-Tonans performs **deterministic single-bus energy accounting**. This document says
-exactly what that means, what it deliberately does not do, and how it is validated —
-because a planning number you cannot argue with is a planning number you should not
-trust.
-
----
+Tonans performs **deterministic single-bus energy accounting**. This document states
+the calculation order, attribution conventions, and validation boundary so every
+planning result can be reviewed rather than accepted as a black box.
 
 ## What the model is not
 
-These are not gaps to be filled in a later version. They are the product boundary.
+- **Not an AC power-flow study.** Voltage, reactive power, phase angle, imbalance,
+  impedance, and short-circuit duty are not modeled.
+- **Not protection, conductor, interconnection, or compliance analysis.**
+- **Not real-time dispatch or control.** Tonans accepts and emits no equipment
+  commands.
+- **Not an electrochemical lifetime model.** Degradation is a transparent linear
+  fade and throughput-cost approximation.
+- **Not an optimizer.** Named dispatch rules use no future load, generation, or
+  price information. Tonans does not claim an optimum it did not compute.
+- **Not a guarantee of savings.** Results are planning estimates for human review.
 
-- **Not an AC power-flow study.** Voltage, reactive power, phase angle, and
-  short-circuit duty are not modelled. There is one bus and one number for power on
-  it.
-- **Not a protection or interconnection analysis.** No coordination, no conductor
-  sizing, no compliance determination.
-- **Not real-time dispatch or control.** Tonans accepts no equipment command and
-  emits none.
-- **Not a battery lifetime model.** Degradation is a transparent linear fade plus a
-  throughput-cost approximation. It is not electrochemical, and Tonans says so on
-  every artifact it touches.
-- **Not an optimiser.** Dispatch policies are named rules evaluated interval by
-  interval with **no view of the future**. A real optimiser with perfect foresight
-  would beat every policy here, and would also be lying to you about what a
-  controller can actually achieve. Tonans will not claim an optimum it did not
-  compute.
-- **Not a guarantee of savings.** It is a planning estimate for human review.
+## Time and units
 
-## The interval loop
+Time is an exact fixed grid: explicit timezone, interval duration, start, and count.
+The duration must divide an hour. Every imported timestamp must land exactly on that
+grid; gaps are refused unless the user selects a bounded synthesis policy, and any
+synthesis remains visible as a critical warning.
 
-Time is a fixed grid: an explicit timezone, an explicit interval duration that
-divides an hour, and a count. Every consecutive timestamp in the source file must be
-exactly one interval apart. Nothing is inferred from the data.
+Within an interval, kW values are treated as constant and converted to kWh using the
+declared interval duration. Battery charge and discharge quantities below are AC-bus
+energy unless explicitly described as energy stored inside the battery.
 
-Within one interval, in this order:
+## Exact interval order
 
-1. Generation meets load directly.
-2. Surplus generation charges the battery, subject to the charge power limit, the
-   inverter limit, the usable-capacity ceiling, and the charge efficiency.
-3. Remaining surplus exports, subject to any site export limit; whatever cannot
-   export is **curtailed**, and counted.
-4. A load deficit is met by discharging the battery, subject to the discharge power
-   limit, the inverter limit, the reserve floor, and the discharge efficiency.
-5. Remaining deficit imports from the grid — or, during an outage, goes unserved:
-   non-critical load is **shed**, critical load that cannot be served is **unmet**,
-   and both are counted.
-6. Self-discharge and temperature derating apply to the stored energy.
+The following order is part of the numeric model:
 
-**Charge and discharge never happen in the same interval.** The engine cannot
-express it, an integration test asserts it, and any dispatch rule that seemed to
-want it is a rule with a bug.
+1. **Standing loss.** Self-discharge is removed from the stored-energy buckets first,
+   pro-rated over a 730-hour nominal month. It cannot pull storage below the hard
+   minimum SOC.
+2. **Temperature factors.** The temperature table is linearly interpolated, holding
+   the nearest endpoint outside its range and emitting a warning. Its **power factor**
+   caps both charge and discharge power. Its **usable-capacity factor** creates a
+   temporary inaccessible floor across the battery's warm usable window: the
+   unavailable fraction is added above the hard minimum SOC.
+3. **Envelope.** Charge headroom and discharge availability are calculated after the
+   standing loss. Charge and discharge are bounded by battery power, inverter power,
+   interval duration, one-way efficiency, the hard SOC bounds, and the temperature
+   constraints. Grid-connected discharge also honors reserve and policy floors.
+   During an outage the reserve and policy floors are released, but the hard minimum
+   and temporary temperature floor remain.
+4. **Policy proposal.** Grid-connected operation asks the named policy for one signed
+   battery setpoint. A positive value discharges; a negative value charges. An outage
+   bypasses the grid-connected policy and uses the islanding rule below.
+5. **Clamping.** The single signed setpoint is clipped to the interval envelope.
+   Charge and discharge are alternate branches of that one decision, so simultaneous
+   charge and discharge is impossible by construction.
+6. **Bus settlement.** The remaining net flow becomes either grid import or grid
+   export, never both. If export would exceed the site limit, controllable battery
+   discharge is reduced first and onsite generation is curtailed second.
+7. **Storage and source buckets.** Charge efficiency is applied before energy enters
+   storage; discharge efficiency determines the internal withdrawal required for AC
+   delivery. Stored energy and its source buckets are updated, conversion loss is
+   recorded, and SOC extrema are observed.
+8. **Tariff accounting.** Interval import cost and export credit are accumulated at
+   that interval's rates. Local calendar month and demand-period peaks are updated
+   for later demand-charge calculation.
 
-Efficiencies are **asymmetric one-way** figures. Round-trip efficiency is derived
-from them, never entered directly, because a single round-trip number hides which
-side of the conversion the loss happened on — and the two sides do not see the same
-tariff.
+Temperature derating does **not** destroy stored energy. When the usable-capacity
+factor raises the temporary floor above the current deliverable range, that energy
+is inaccessible for discharge during the cold interval but remains in the source
+buckets. If the battery warms and the floor falls, the stored energy becomes
+available again. The power factor still caps both directions independently.
 
-### Energy conservation
+## Outage order
 
-Every interval closes:
+Grid import and export are zero. Non-critical load is shed and reported separately.
+Onsite generation serves critical load first. A deficit is met from storage down to
+the hard/temperature floor, with any remainder reported as unmet critical load. A
+surplus charges the battery within the envelope and is otherwise curtailed. The
+reserve floor is intentionally released because outage use is what the reserve is
+for.
 
+## Flow and source attribution
+
+A single bus does not reveal the physical path taken by indistinguishable electrons,
+so Tonans uses one explicit accounting convention:
+
+- onsite generation is attributed to served load first, battery charging second,
+  and direct grid export third;
+- battery discharge is attributed to remaining served load first and grid export
+  second;
+- any remaining charge is attributed to the grid;
+- stored energy is tracked in three buckets: onsite-generation origin, grid origin,
+  and energy present at model start whose source is unknown;
+- withdrawals remove those stored buckets proportionally, then allocate the
+  efficiency-adjusted output between load and export using the same load/export
+  fraction.
+
+The convention closes every reported source flow without pretending the model can
+identify a physical electron. Initial stored energy remains `unknown`; Tonans does
+not silently relabel it as renewable.
+
+### Self-consumption and self-sufficiency
+
+Self-consumption is the share of available onsite generation used directly or sent
+to storage, less generation-origin battery energy later exported.
+
+Self-sufficiency is the share of **served load met by onsite generation directly or
+after storage**. Grid-origin battery energy and unknown initial battery energy are
+excluded. Sensitivity cells are complete reruns and use this same definition; a
+metric does not change meaning merely because an input is being swept.
+
+## Energy identities
+
+Each interval checks the AC-bus identity:
+
+```text
+generation used + grid import + battery discharge
+  = served load + grid export + battery charge
 ```
-generation + import + discharge  =  served load + export + curtailed + charge
-                                    + conversion loss + self-discharge loss
-                                    + change in stored energy
+
+Generation also closes as:
+
+```text
+generation available = generation used + curtailed generation
 ```
 
-The residual is computed, carried into every result, and **printed in the report**,
-so a reader can check that the model closed rather than take our word for it. It is
-zero to within floating-point noise, and an integration test fails if it is not.
+Storage closes separately:
 
-## Money
+```text
+ending stored energy
+  = starting stored energy - standing loss
+    + charge * charge efficiency
+    - discharge / discharge efficiency
+```
 
-Money is accumulated in `f64` at full precision and rounded **exactly once**, at the
-boundary where it becomes an output. Rounding each interval instead would accumulate
-up to half a cent of bias across 35,040 intervals.
+Conversion loss is the difference between AC-bus charge/discharge and the associated
+internal storage change. Residuals and losses are carried into results and reports;
+the invariant suite fails if the balance exceeds tolerance.
 
-The rounding rule is **half away from zero, at the cent** — and it is applied to the
-value's shortest round-trip **decimal** form, not to its binary expansion.
+## Money and tariffs
 
-That distinction is not pedantry, and it is worth the paragraph. The obvious
-implementation is `(value * 100.0).round() / 100.0`, and it is wrong in a way a user
-can catch by hand. The nearest `f64` to `0.145` is a hair *below* it, so
-`0.145 * 100.0` is `14.499999999999998` and rounds **down** to `0.14` — while an
-analyst with a 0.145 USD/kWh tariff and 1 kWh of import does the arithmetic on paper,
-gets 0.15, and files a bug. Meanwhile `2.675 * 100.0` lands on exactly `267.5` and
-rounds **up**. The naive form does not even fail consistently: it returns whichever
-answer the representation error happens to produce.
+Interval money is accumulated in `f64` without cent-rounding each row. Customer-facing
+totals are rounded once at the output boundary using decimal half-away-from-zero at
+the cent. Machine-readable interval values retain sufficient decimal precision for
+their sum to reconcile with the unrounded accumulator before the final cent rounding.
 
-Tonans promises hand-checkable numbers, and hands work in decimal. So the rounding
-happens on the digits the report actually prints.
+Tariff support includes:
 
-Cost components sum to the total within a cent, and an integration test asserts it.
-
-## Tariffs
-
-- Energy charges on import, at a flat rate or a per-interval price series.
-- Export credit at a flat rate or a per-interval price series.
-- **Negative import prices are permitted**, because wholesale markets have them.
-  Tonans accounts for them and warns you, because it means importing energy can
-  *earn* money — so a dispatch policy that avoids import is not necessarily the
-  cheaper one, and a reader who has not noticed will draw the wrong conclusion.
-- Monthly demand charges on the peak import in each labelled period, bucketed by the
-  **site's local calendar month**, not by elapsed time.
-- Fixed charges.
+- flat or per-interval import energy rates;
+- flat or per-interval export credits;
+- negative import prices, with a warning;
+- local-calendar-month demand charges by labeled demand period; and
+- fixed monthly charges.
 
 ## Economics
 
-CAPEX, OPEX, replacement assumptions, simple and discounted payback, and a simple
-NPV against a no-storage baseline.
+Tonans reports CAPEX, annual OPEX, replacement assumptions, simple and discounted
+payback, and a simple NPV against the no-storage baseline. It includes no tax,
+incentive, depreciation, or residual value.
 
-There is **no tax, incentive, depreciation, or residual value** in this model.
-Tonans would have to guess at all four, and a guess in a financial model is worse
-than an absence — an absence is visible.
+If a data set is shorter than a year, period results are multiplied by the stated
+annualization factor. A warning explains that demand charges and seasonal behavior
+do not necessarily scale with elapsed time.
 
-When the data set is shorter than a year, annual figures are the simulated period
-multiplied by a stated annualization factor, and the report says so in a banner,
-because **demand charges and seasonal load do not scale with elapsed time.** A
-three-week data set annualized to a year is an estimate built on an estimate, and
-you should be told.
+The configured energy-price escalation rate applies **only to energy savings**:
+import-energy charges and export-credit differences. Demand-charge and fixed-charge
+savings do not escalate. Annual OPEX and throughput wear cost are held constant in
+nominal terms; replacement follows the explicit replacement assumption. If the user
+selects capacity-proportional benefit scaling, the documented fade factor is applied
+to modeled benefits, but Tonans does not rerun dispatch for every future year.
 
-## Determinism
+## Determinism and hashes
 
-The same project produces **byte-identical** results, on any machine, forever.
+`tonans-core` has no ambient clock or randomness. Observable ordering is explicit,
+negative zero is normalized before hashing, and the long-horizon calculation avoids
+platform-dependent transcendental functions.
 
-- `tonans-core` contains no clock and no randomness. Wall-clock reads are banned by
-  a lint across the whole workspace; every timestamp is *injected* by the caller.
-- Transcendental functions are avoided in favour of iterated multiplication, because
-  `powf` is a libm call and libm is not required to be bit-identical across
-  platforms.
-- Nothing iterates a hash map. Ordering is explicit everywhere it is observable.
-- Negative zero is normalised before hashing, because it is arithmetically equal to
-  positive zero but serializes differently.
+The supported reproducibility claim is: **the same canonical model inputs, the same
+`MODEL_VERSION`, and the same supported build target produce the same numeric
+`results_hash`.** Presentation files may differ because generation timestamps,
+metadata, and nonnumeric prose are excluded from the numeric result identity.
 
-`model_input_hash` covers exactly the things that determine the numbers — the data
-set, the scenarios, the baseline, and the model version — and nothing else.
-`results_hash` covers the results with the generation timestamp removed. **Two runs
-with the same `model_input_hash` must produce the same `results_hash`**, an
-integration test asserts it, and a reader can use the pair to tell whether a
-difference between two reports is real or cosmetic.
+`model_input_hash` covers the data set, scenarios, selected baseline, and model
+version. `results_hash` covers the numeric results after nonnumeric generation
+metadata is removed. `MODEL_VERSION` changes whenever an unchanged canonical input
+could produce a different number.
 
-`MODEL_VERSION` is independent of the application version and is incremented
-whenever a change could alter a number for an unchanged input. A documentation or UI
-release leaves it alone, so a reader of an old report can tell whether today's build
-would still reproduce it.
+## Validation
 
-## How the model is validated
-
-| | |
+| Evidence | Scope |
 |---|---|
-| **Golden cases** | Hand-calculable scenarios with known answers: no battery, ideal shifting, round-trip loss, charge/discharge and inverter caps, SOC reserve, outage depletion, export curtailment, monthly demand charge. |
-| **Invariants** | Asserted over full runs, per interval and in aggregate: energy conservation, bounded SOC, no simultaneous charge/discharge, non-negative unmet load, deterministic repeat output, consistent money totals. |
-| **Import abuse** | Malformed headers, unit mismatch, `NaN`/infinity, duplicate and non-monotonic timestamps, gaps, DST ambiguity, oversized files, hostile filenames and paths. |
-| **Unit contract** | The result tree is serialized and every numeric leaf must resolve to a unit from its field name. A new quantity cannot reach a report without one. |
+| Golden cases | Hand-calculable battery, loss, cap, reserve, outage, curtailment, tariff, and demand-charge cases. |
+| Invariants | Energy closure, bounded SOC, one-direction battery flow, nonnegative unmet load, repeat hashes, and money reconciliation. |
+| Import abuse | Malformed headers, unit mismatch, non-finite values, duplicate or off-grid timestamps, DST ambiguity, gaps, oversized inputs, and hostile names/paths. |
+| Unit contract | Every numeric field in a populated serialized result resolves to an explicit unit. |
+| Public reference | A pinned, normalized SSC battery-state replay covering floor enforcement, clipping, throughput, import, and loss accounting. |
 
-### The independent comparison — outstanding
+### Public-reference comparison
 
-**PRODUCT-SPEC.md requires one documented comparison against an established public
-tool or published reference case, with matching assumptions and every difference
-explained rather than hidden. That comparison has not been done.**
+The public-reference gate is closed by `docs/BENCHMARK.md` and
+`crates/tonans-core/tests/ssc_capacity_reference.rs`. The reference is pinned to SSC
+commit `86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832` and reproduces the published
+battery-state request sequence under normalized matching assumptions.
 
-It is a **release-blocking gap**, it is recorded as such in
-`docs/RELEASE-CHECKLIST.md`, and it is the reason this build is a release candidate
-for operator testing rather than a published product. Until it exists, Tonans'
-agreement with the wider world is asserted and not demonstrated — and this document
-would be dishonest if it implied otherwise.
+This is deliberately a **narrow normalized SSC battery-state reference replay**. It
+is not SAM certification, an endorsement by SSC or its maintainers, or evidence of
+full SSC/SAM parity. The benchmark document lists the normalization, expected values,
+tolerance, and upstream lines so its limits are auditable.
 
-An independent review by a qualified energy analyst is wanted for the same reason.
+An independent review by a qualified energy analyst remains desirable before a
+customer relies on Tonans for consequential planning.
 
 ## Warnings
 
-Whenever an input or a model limit makes a result unreliable, Tonans raises a
-warning, carries it through every artifact, and prints **all** of them in the report,
-most serious first. None is filtered out for being inconvenient.
+Warnings are never filtered for convenience. Every relevant warning travels through
+the scenario result, report, and provenance manifest, sorted by severity. A
+synthesized interval always creates a critical warning that remains attached to the
+data set and every downstream artifact.
 
-A synthesized interval always raises a `critical` warning, and that warning rides on
-the data set for the rest of its life — into every scenario, every report, and every
-provenance manifest built from it. A filled interval is never silent.
-
----
-
-Flintglade — `support@flintglade.com`
+Support: `support@flintglade.com`

@@ -1,147 +1,146 @@
 # Security
 
 Tonans is a local application that listens on a socket. That socket is reachable by
-every process on the machine and — this is the part people miss — by **every web
-page you have open**, because a page may issue cross-origin requests to
-`http://127.0.0.1:<port>` and does not need to read the response to do damage.
+every process on the machine and by web pages that can issue requests to loopback,
+even when the browser prevents those pages from reading the response. The HTTP and
+filesystem boundaries below are designed around that threat.
 
-Everything below exists because of that sentence.
+## Product boundary
 
----
+Tonans never accepts or emits an equipment-control command. It has no inverter,
+relay, BMS, SCADA, shell-execution, arbitrary-file-read, or arbitrary-path route.
+It produces planning estimates for human review, not live control decisions.
 
-## The boundary
+## Request defenses in order
 
-Tonans **never** accepts or emits an equipment-control command. There is no route
-that talks to an inverter, a controller, a relay, a BMS, or SCADA. There is no
-route that runs a program, and no route that reads an arbitrary file. There never
-will be. This is a product boundary, not a configuration.
+1. **Random loopback listener.** The listener binds `127.0.0.1` on a kernel-selected
+   port and verifies the resulting address is loopback. Nothing off the machine can
+   connect directly.
 
-## The defences, in the order a request meets them
+2. **Bounded admission.** A fixed worker pool consumes a bounded accept queue. When
+   the queue is full, the new connection receives a bounded busy response; Tonans
+   does not create an unbounded thread or retain an unbounded connection list.
 
-1. **Loopback only, on a random port.** The listener binds `127.0.0.1` on port 0,
-   so the kernel picks the port. Nothing off the machine can connect, and the port
-   is not a fixed target for a page scanning for local services. The bind is
-   re-checked after the fact — if the resolved address is not a loopback address,
-   the process refuses to serve at all.
+3. **Bounded request head and absolute deadline.** Request-line length, header count,
+   and each physical header-line length are checked while reading. A header line must
+   terminate within its byte cap. Per-read inactivity limits are enforced inside one
+   absolute deadline spanning request-head and body reads, so a peer cannot retain a
+   worker indefinitely by sending one byte before each timeout.
 
-2. **A launch token on every control route.** 256 bits from the operating system's
-   CSPRNG, minted at launch, **never written to disk**, dead when the process exits.
-   Required as `Authorization: Bearer <token>` on every `/api` route. It is compared
-   in **constant time**, so the comparison's duration cannot be used to reconstruct
-   it a byte at a time.
+4. **Head-only security preflight before body allocation.** Tonans parses method,
+   path, and headers, then runs these guards before reading a request body:
 
-   A page in another tab can reach the socket. It cannot guess the token.
+   - `Host` must equal the address/port Tonans actually bound (or the corresponding
+     `localhost` form), preventing DNS rebinding;
+   - a present `Origin` must be Tonans' own loopback origin;
+   - the local fixed-window request-rate bound must allow the request; and
+   - every `/api` control route must carry the launch bearer token.
 
-3. **The `Host` header is pinned** to the address actually bound. Without this, DNS
-   rebinding works: an attacker's domain resolves to `127.0.0.1`, the browser treats
-   the response as same-origin, and the same-origin policy stops helping. A request
-   whose `Host` is anything else is refused with a 400 before anything else happens.
+   A refused peer cannot make Tonans receive or allocate a large control-route body
+   first.
 
-4. **A cross-origin `Origin` is refused** with a 403.
+5. **Per-route body framing and limits.** Only an accepted head proceeds to the
+   route's `Content-Length` limit. Chunked request bodies are unsupported, leaving
+   one request-framing rule. One request is served per connection; keep-alive,
+   multipart upload, WebSockets, HTTP/2, and compression are deliberately absent.
 
-5. **Every request is bounded.** A per-route body limit checked against
-   `Content-Length` *before a byte of body is read*; a bounded request line, header
-   count, and header size, all checked while reading; a read timeout, so a
-   connection that dribbles bytes cannot hold a worker open; a fixed worker pool, so
-   the number of connections in flight is the pool size and not whatever an attacker
-   opens; and a fixed-window rate limit, because the likeliest attacker here is a
-   runaway loop in a page.
+6. **Restrictive response policy.** Responses add a Content-Security-Policy with
+   `default-src 'none'`, limited `'self'` sources for the embedded application,
+   `frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'none'`, and
+   `object-src 'none'`. Tonans also sends frame, content-type, referrer, cache,
+   cross-origin, and permissions headers that disable unnecessary browser
+   capabilities. Response header names and values containing CR or LF are discarded.
 
-   There is **no `Transfer-Encoding: chunked` support**, so there is no second way
-   to frame a body — which is where request smuggling lives.
+## Launch token
 
-6. **A restrictive Content-Security-Policy**: `default-src 'none'`, with `'self'`
-   for script, style, image, font, and connect. No `unsafe-inline`, no `unsafe-eval`,
-   no wildcard, no remote origin. `frame-ancestors 'none'`, `form-action 'none'`,
-   `base-uri 'none'`, `object-src 'none'`. Alongside it: `X-Frame-Options: DENY`,
-   `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `no-store`,
-   and a `Permissions-Policy` that turns off geolocation, camera, microphone, USB,
-   serial, Bluetooth, and payment.
+Each process mints 256 random bits from the operating system CSPRNG. The token is
+never written to disk and dies with the process. Control routes require it as an
+`Authorization: Bearer` value, compared in constant time. Static assets are public
+to loopback because the page must load before it can send the token; they contain no
+project data or secret.
 
-   The CSP is honest because **every byte the browser loads is compiled into the
-   executable.** There is no CDN, no font service, and no asset directory. A test
-   fails the build if the UI source so much as *mentions* a remote origin.
+The bootstrap URL carries the token only for the initial local navigation. Responses
+use `Referrer-Policy: no-referrer` and `Cache-Control: no-store` so it is not sent
+onward or cached by Tonans.
 
-## The user interface
+## Embedded and exported UI
 
-Nothing is ever assigned to `innerHTML`. Every string that reaches the DOM — a
-scenario name, a warning, a source filename — is set through `textContent`, and a
-test fails the build if `innerHTML`, `eval`, `new Function`, `document.write`, or
-`insertAdjacentHTML` appears in the script. Some of those strings came out of a CSV
-that Tonans does not control.
+Browser assets are compiled into the executable. They reference no CDN, remote font,
+analytics service, advertisement, or remote origin. Build tests reject unsafe DOM
+sinks such as `innerHTML`, `eval`, `new Function`, `document.write`, and
+`insertAdjacentHTML`; untrusted labels are written with `textContent`.
 
-The exported HTML report carries its own `Content-Security-Policy` of
-`default-src 'none'`. It has no script and fetches nothing. It opens from a
-filesystem, an email attachment, or a USB stick in ten years' time, and it does the
-same thing every time.
+Exported HTML contains no script or remote fetch and carries its own restrictive CSP.
+It is designed to remain a static evidence artifact when opened from disk or an
+attachment.
 
-## Untrusted input
+## Untrusted CSV and project input
 
-The CSV importer treats every file as hostile and every value as a lie until proved
-otherwise. It **refuses rather than repairs**: a malformed header, a unit that
-cannot express its role, a `NaN` or infinity, a duplicate or backwards timestamp, a
-timestamp off the declared grid, a timestamp that is ambiguous or nonexistent across
-a daylight-saving transition, a negative load, a critical load above total load, an
-empty cell, or an unmapped column is a hard error naming the row and the column.
+The importer refuses ambiguity rather than repairing it silently. It rejects
+malformed or duplicate headers, unit mismatches, non-finite numbers, backwards,
+duplicate, or off-grid timestamps, ambiguous/nonexistent local times, invalid load
+relationships, empty required cells, and columns that are neither mapped nor
+explicitly ignored. Field length is checked even for ignored and previewed cells.
 
-Missing intervals are the single exception, and only when the user *deliberately*
-configures a gap policy — in which case the synthesized intervals are counted, their
-indices recorded, a critical warning rides on the data for the rest of its life, and
-the whole thing is capped as a fraction of the file.
+Gap synthesis occurs only under an explicit bounded user policy. Synthesized indices
+and counts are retained and a critical warning follows the data set into every run,
+report, and provenance manifest.
 
-**Every unbounded input has a hard bound**, enforced during accumulation rather than
-after it: file size, row count, column count, field length, value magnitude,
-interval count, scenario count, sensitivity cells, outage windows, schedule entries,
-and demand-charge periods. A limit that is only checked once the memory has been
-allocated is not a limit.
+Input limits are enforced during accumulation, before the attacker-controlled size
+has already been allocated: request body, file, row, column, field, interval,
+scenario, sensitivity, outage, schedule, demand-period, and numeric-magnitude bounds.
 
-**Names are never paths.** The browser uploads CSV *bytes* and addresses projects by
-*name*. A name is validated — no separators, no colons, no traversal, no control
-characters, no bidirectional overrides, no Windows reserved device names, no trailing
-dots or spaces — and it is **refused, never sanitized**. A name Tonans cannot store
-is an error the user gets to see and fix, not a name Tonans quietly invents. The
-join beneath the workspace root is then re-checked against the resolved parent, so a
-symlink or junction planted in the workspace cannot redirect a write.
+Exported CSV fields that begin with spreadsheet formula markers (`=`, `+`, `-`, `@`,
+tab, or carriage return) are prefixed and quoted so Excel/Calc do not evaluate a
+project-controlled label as a formula.
 
-**Exported CSV is defused against spreadsheet formula injection.** A cell beginning
-`=`, `+`, `-`, `@`, tab, or carriage return is executed by Excel and Calc when the
-file is opened — `=cmd|'/c calc'!A1` is a DDE payload, not a label. Such a field is
-prefixed with a single quote *and* quoted, so that no importer's whitespace-trimming
-or text-marker handling can undo the neutralisation.
+## Filesystem and junction defenses
 
-## The dependency tree
+User-visible identifiers are names, never paths. Validation rejects separators,
+drive/stream colons, traversal, controls, bidirectional overrides, Windows device
+names, and trailing dots or spaces. Invalid names are refused rather than sanitized.
 
-Thirty-seven crates, and that number is a design constraint rather than an accident.
+The workspace root is resolved once, but that is not the only check. Before each
+operation Tonans verifies that expected child directories and existing files are
+direct physical children of their resolved parent. On Windows, any reparse point -
+including a junction planted after startup - is refused; on other supported build
+environments, symbolic links are refused. The canonical direct-parent relationship
+is rechecked at use time. Project files whose internal project name does not match
+their filename are refused rather than silently loaded under another identity.
 
-Tonans has no HTTP framework. It once used Axum, which brings Tokio, which brings
-Mio, which brings `windows-sys` — around sixty crates into the dependency tree of a
-binary whose entire pitch is that you can audit it, all of it to serve *one user, on
-loopback, at human speed*. The whole HTTP surface is now about three hundred lines
-of `std::net`. The argument-parser is sixty lines rather than a derive macro and its
-half-dozen crates.
+Writes use unique temporary files followed by atomic replacement, so concurrent or
+interrupted writes do not share a predictable staging path or expose a partial JSON
+document.
 
-`unsafe_code` is **forbidden** workspace-wide, not merely denied.
+## Dependencies and unsafe code
 
-`cargo audit` runs against the locked tree as a release gate, and the bill of
-materials ships with the binary as `SBOM.cdx.json`.
+The application uses a small blocking `std::net` HTTP surface instead of an
+asynchronous framework stack. The exact locked dependency tree, not a prose count,
+is the source of truth. `unsafe_code` is forbidden workspace-wide, `cargo audit`
+runs as a release gate, and the shipped package includes a CycloneDX SBOM and the
+applicable third-party licence texts.
+
+## Package and runtime boundary
+
+The release goal is a self-contained Windows x64 package. Verification must inspect
+the executable's PE imports and prove the staged payload works with compiler and
+llvm-mingw directories removed from `PATH`. If a non-system runtime is required, it
+must be included in the payload, listed in the SBOM and notices, and covered by the
+checksums. A smoke pass that succeeds only because a build toolchain happens to be
+installed is not release evidence.
+
+Release builds remap repository, Cargo, and user-profile paths. The independent
+package scan rejects personal identity, build-machine paths, test secrets, payment
+origins, and undeclared files.
 
 ## Signing
 
-**This release candidate is not code-signed.** Windows SmartScreen will warn that
-the publisher cannot be confirmed, and that warning is correct — an unsigned binary
-is exactly what it says it is.
-
-Verify the SHA-256 of the ZIP against the `.sha256` sidecar published beside it, and
-then `SHA256SUMS.txt` inside the package, which covers the executable itself. The
-`README.md` in the package shows the commands.
-
-We would rather ship an honestly unsigned binary with a published checksum than
-imply an assurance we have not bought.
+This release candidate is explicitly unsigned. Windows SmartScreen may warn that the
+publisher cannot be confirmed, and that warning is accurate. The external archive
+digest and internal `SHA256SUMS.txt` establish integrity against published values;
+they do not provide publisher authentication.
 
 ## Reporting a vulnerability
 
-`support@flintglade.com`
-
-Tell us what you found and how to reproduce it. If it is a genuine security issue we
-will fix it and credit you if you want the credit. Please do not test against
-anything that is not your own machine.
+Email `support@flintglade.com` with a reproducible description. Test only systems and
+data you are authorized to test.

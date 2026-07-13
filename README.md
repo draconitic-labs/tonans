@@ -2,80 +2,79 @@
 
 Tonans is Flintglade's local-first microgrid scenario workbench. It compares
 transparent battery, tariff, renewable-generation, and outage-planning scenarios
-without controlling equipment or pretending to be a safety-certified design
-authority.
+without controlling equipment or presenting planning estimates as certified designs.
 
-## Status: release candidate, for operator testing. Not published.
+## Status: release candidate for operator testing. Not published.
 
-The build gates pass — formatting, strict clippy, the full test suite, `cargo audit`,
-a production build, a packaged-binary smoke test, an SBOM, notices, checksums, and a
-package scan. `docs/RELEASE-CHECKLIST.md` records each one with the command that
-closes it.
+The code gates have passed during the current hardening cycle: formatting, strict
+Clippy, the workspace test suite, dependency audit, production build, and package
+checks. The final integrated package and fresh-context review gates will be rerun
+after the current release changes are combined; `docs/RELEASE-CHECKLIST.md` records
+the reproducible commands and does not treat an earlier run as evidence for a later
+artifact.
 
-**Three gates from `PRODUCT-SPEC.md` are still open, and they block publication:**
+The required public-reference comparison is closed by `docs/BENCHMARK.md` and the
+executable SSC regression. Its scope is deliberately narrow: a normalized SSC
+battery-state reference replay pinned to SSC commit
+`86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832`. It is not certification, endorsement,
+or a claim of SAM/SSC parity.
 
-1. **No independent comparison** against an established public tool or published
-   reference case. Tonans is internally consistent — golden hand calculations,
-   energy conservation, deterministic reruns — but internal consistency is not
-   correctness, and we do not yet know whether the model agrees with the rest of
-   the world.
-2. **No fresh-context review.** The review so far was done by the context that wrote
-   the code, and shares its blind spots. An independent energy analyst should read
-   the engine against `docs/MODEL.md`.
-3. **No browser DOM smoke test.** The HTTP boundary and the
-   `import → run → export` pipeline are covered end to end on the packaged binary;
-   clicking through the actual screens is not automated.
+The remaining user-visible release gate is the operator's browser walkthrough of
+the real DOM: import -> configure -> run -> compare -> sensitivity -> export ->
+reopen. The API and packaged-binary path underneath that workflow are tested, but
+automated API coverage is not a substitute for clicking the screens.
 
-Sales are not enabled: there is no purchase flow, no licence key, no activation
-server, and no payment integration in the executable. Every build runs in the
-Evaluation tier.
+Sales remain disabled. There is no purchase flow, licence key, activation server,
+Stripe catalog entry, or payment integration in the executable. Every current build
+runs in the Evaluation tier.
 
 ## What it is
 
-Deterministic single-bus energy accounting, producing **planning estimates for human
-review**. It is not an AC power-flow study, a protection or interconnection analysis,
-a battery lifetime model, an optimiser, or a guarantee of savings. `docs/MODEL.md`
-states the boundary in full, and the application repeats it on every screen and in
-every artifact it writes.
+Tonans performs deterministic single-bus energy accounting and produces **planning
+estimates for human review**. It is not an AC power-flow study, a protection or
+interconnection analysis, a battery lifetime model, an optimiser, or a guarantee of
+savings. `docs/MODEL.md` states the boundary in full, and every screen and export
+repeats it.
 
-It is local-first in the literal sense: it binds only `127.0.0.1`, serves only assets
-compiled into the binary, makes no outbound connection of any kind, and stores your
-data in one folder you can delete.
+It is local-first in the literal sense: it binds only to `127.0.0.1`, serves assets
+compiled into the executable, makes no outbound connection, and stores project data
+under the workspace the user selects.
 
 ## Documentation
 
 | | |
 |---|---|
-| `PRODUCT-SPEC.md` | The authoritative requirements and the finish line. |
+| `PRODUCT-SPEC.md` | The authoritative requirements and release finish line. |
 | `AGENTS.md` | The engineering contract. |
-| `docs/MODEL.md` | What the model does, what it refuses to do, and how it is validated. |
-| `docs/ARCHITECTURE.md` | Two crates, why there is no HTTP framework, and the toolchain. |
-| `docs/SECURITY.md` | The threat model and every defence, in the order a request meets them. |
-| `docs/PRIVACY.md` | What is collected (nothing), where data lives, and how to remove it. |
-| `docs/RELEASE-CHECKLIST.md` | Every gate, its command, and what is still blocking. |
-| `TERMS.md` | Licence tiers and proposed pricing. Sales are not enabled. |
-| `LICENSE.md` | The software licence. Proprietary; third-party components are not. |
+| `docs/MODEL.md` | Model order, assumptions, metrics, limitations, and validation. |
+| `docs/BENCHMARK.md` | The pinned, normalized SSC battery-state reference replay. |
+| `docs/ARCHITECTURE.md` | Crate boundaries, HTTP design, toolchain, and packaging goal. |
+| `docs/SECURITY.md` | Threat model and defenses in request and filesystem order. |
+| `docs/PRIVACY.md` | What is collected, where data lives, and how to remove it. |
+| `docs/RELEASE-CHECKLIST.md` | Reproducible gates and the remaining operator step. |
+| `TERMS.md` | Proposed licence tiers and pricing; sales are disabled. |
+| `LICENSE.md` | Proprietary software licence; third-party components remain under their own licences. |
 
 ## Building
 
 Windows x64, with the llvm-mingw toolchain:
 
 ```powershell
-$env:PATH='<cargo>\bin;<llvm-mingw>\bin;'+$env:PATH
-cargo +stable-x86_64-pc-windows-gnullvm test  --workspace --all-targets --locked
+$env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
+cargo +stable-x86_64-pc-windows-gnullvm test --workspace --all-targets --locked
 cargo +stable-x86_64-pc-windows-gnullvm clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 ## Packaging
 
 ```powershell
-.\packaging\package.ps1          # build the release candidate, SBOM, notices, checksums, zip
-.\packaging\verify-package.ps1   # 13 checks: file set, version metadata, identity, secrets, checksums
-.\packaging\smoke.ps1            # 13 checks: run the packaged binary, prove its boundary, stop it
+.\packaging\package.ps1
+.\packaging\verify-package.ps1
+.\packaging\smoke.ps1
 ```
 
-None of the three publishes, signs, uploads, installs, or creates a shortcut.
-Publication remains a manual, human decision, and it should not be made until the
-three gates above are closed.
+These scripts build and verify a local release candidate. They do not publish,
+upload, install, enable sales, or create a shortcut. Publication remains a deliberate
+human decision after the integrated gates and operator walkthrough pass.
 
-Support identity: `support@flintglade.com`.
+Support: `support@flintglade.com`.
