@@ -46,9 +46,10 @@ discarded when the import completes or you abandon it. The file you selected is
 never copied into the workspace; only the data you actually imported, and a SHA-256
 digest of the bytes it came from, is stored.
 
-Tonans writes nowhere else. It creates no registry keys, no services, no scheduled
-tasks, no shell extensions, and no files in `Program Files`, `AppData\Roaming`, or
-your home directory. Path confinement is enforced in code, not by convention: names
+Browser-driven project and export writes stay in the workspace. The headless CLI
+can also write an export to the directory you explicitly choose with `--out`;
+remove that directory separately when uninstalling. Tonans creates no registry
+keys, services, scheduled tasks, or shell extensions. For workspace operations, names
 are validated and joined beneath the workspace root, and the join is re-checked
 against the resolved parent so that a symlink planted in the workspace cannot
 redirect a write.
@@ -61,8 +62,8 @@ Delete the workspace folder. Delete `Tonans.exe`. That is the whole uninstall.
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Flintglade\Tonans"
 ```
 
-There is nothing left behind, because there was never anything anywhere else. You
-do not need to ask us to delete anything, because we never had it.
+Also delete any headless export directories you chose with `--out`. You do not
+need to ask us to delete your project data, because it was never sent to us.
 
 ## The network
 

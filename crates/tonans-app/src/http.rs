@@ -278,7 +278,15 @@ impl Read for DeadlineStream {
         }
         self.stream
             .set_read_timeout(Some(remaining.min(READ_TIMEOUT)))?;
-        self.stream.read(buffer)
+        self.stream.read(buffer).map_err(|error| {
+            // SO_RCVTIMEO reports EAGAIN/WouldBlock on Unix and TimedOut on
+            // Windows. Expose one portable timeout contract to the parser.
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, error)
+            } else {
+                error
+            }
+        })
     }
 }
 

@@ -24,6 +24,9 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 use crate::canonical::{canonical_hash, canonical_json, hash_bytes};
 use crate::error::{Error, Result};
@@ -62,37 +65,20 @@ pub fn write_bundle(
     })?;
     fs::create_dir_all(parent).map_err(|e| Error::io("creating the export parent", e))?;
 
-    // A bundle is promoted as one directory. We never write into a dirty final
-    // directory: that is how an artifact removed from a later export survives
-    // unlisted and unchecked. An existing non-empty destination is refused rather
-    // than deleted, because a caller-supplied --out directory may contain their work.
-    if directory.exists() {
-        if !directory.is_dir() {
-            return Err(Error::validation(
-                "validation.export_destination_exists",
-                "export.directory",
-                "the export destination exists and is not a directory",
-            ));
+    // Exclusively create our own sibling directory. Never remove a pre-existing
+    // staging path: it may belong to another export or contain unrelated data.
+    let staging = loop {
+        let candidate = parent.join(format!(
+            ".tonans-export-{}-{}",
+            std::process::id(),
+            STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(Error::io("creating the export staging directory", error)),
         }
-        let mut entries =
-            fs::read_dir(directory).map_err(|e| Error::io("reading the export destination", e))?;
-        if entries.next().is_some() {
-            return Err(Error::validation(
-                "validation.export_destination_not_empty",
-                "export.directory",
-                "the export destination is not empty; choose a new directory",
-            ));
-        }
-        fs::remove_dir(directory)
-            .map_err(|e| Error::io("removing the empty export destination", e))?;
-    }
-
-    let staging = directory.with_extension("tonans-staging");
-    if staging.exists() {
-        fs::remove_dir_all(&staging)
-            .map_err(|e| Error::io("removing a stale export staging directory", e))?;
-    }
-    fs::create_dir(&staging).map_err(|e| Error::io("creating the export staging directory", e))?;
+    };
 
     let outcome = write_bundle_into(&staging, project, run, sensitivities);
     let mut bundle = match outcome {
@@ -102,6 +88,60 @@ pub fn write_bundle(
             return Err(error);
         }
     };
+    if directory.exists() {
+        let existing = (|| {
+            if !directory.is_dir()
+                || fs::symlink_metadata(directory)
+                    .map_err(|e| Error::io("inspecting the export destination", e))?
+                    .file_type()
+                    .is_symlink()
+            {
+                return Err(Error::validation(
+                    "validation.export_destination_exists",
+                    "export.directory",
+                    "the export destination is not an ordinary directory",
+                ));
+            }
+            let entries = fs::read_dir(directory)
+                .map_err(|e| Error::io("reading the export destination", e))?
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| Error::io("reading the export entries", e))?;
+            if entries.is_empty() {
+                fs::remove_dir(directory)
+                    .map_err(|e| Error::io("removing the empty export destination", e))?;
+                return Ok(false);
+            }
+            // Reuse only the complete, byte-identical bundle. Extra files,
+            // symlinks and modified artifacts are preserved and refused.
+            let identical = entries.len() == bundle.artifacts.len()
+                && bundle.artifacts.iter().all(|artifact| {
+                    let path = directory.join(&artifact.filename);
+                    fs::symlink_metadata(&path)
+                        .is_ok_and(|m| m.file_type().is_file() && m.len() == artifact.size_bytes)
+                        && fs::read(&path).is_ok_and(|bytes| hash_bytes(&bytes) == artifact.sha256)
+                });
+            if identical {
+                return Ok(true);
+            }
+            Err(Error::validation(
+                "validation.export_destination_not_empty",
+                "export.directory",
+                "the export destination contains different files; choose a new directory",
+            ))
+        })();
+        match existing {
+            Ok(true) => {
+                let _ = fs::remove_dir_all(&staging);
+                bundle.directory = directory.display().to_string();
+                return Ok(bundle);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        }
+    }
     if let Err(error) = fs::rename(&staging, directory) {
         let _ = fs::remove_dir_all(&staging);
         return Err(Error::io("promoting the complete export bundle", error));
@@ -717,6 +757,35 @@ mod tests {
         assert_eq!(fs::read(&marker).unwrap(), b"user data");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_preserves_unrelated_staging_and_reuses_only_identical_bundles() {
+        let (project, run) = runnable_project();
+        let directory = test_directory("reuse");
+        let unrelated = directory.with_extension("tonans-staging");
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::write(unrelated.join("keep.txt"), b"unrelated data").unwrap();
+        let first = write_bundle(&directory, &project, &run, &[]).unwrap();
+        let second = write_bundle(&directory, &project, &run, &[]).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            fs::read(unrelated.join("keep.txt")).unwrap(),
+            b"unrelated data"
+        );
+        fs::write(directory.join("summary.json"), b"user modification").unwrap();
+        assert_eq!(
+            write_bundle(&directory, &project, &run, &[])
+                .unwrap_err()
+                .code(),
+            "validation.export_destination_not_empty"
+        );
+        assert_eq!(
+            fs::read(directory.join("summary.json")).unwrap(),
+            b"user modification"
+        );
+        fs::remove_dir_all(directory).unwrap();
+        fs::remove_dir_all(unrelated).unwrap();
     }
 
     #[test]
