@@ -134,9 +134,13 @@ impl Handler for Router {
     fn body_limit(&self, _method: &str, path: &str) -> usize {
         // The upload route carries raw CSV and gets the importer's own limit, so a file
         // that would be refused is refused before it is buffered.
-        if path == "/api/upload" {
+        let segments: Vec<_> = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if segments.as_slice() == ["api", "upload"] {
             limits::MAX_CSV_BYTES
-        } else if path.starts_with("/api/") {
+        } else if segments.first() == Some(&"api") {
             MAX_JSON_BYTES
         } else {
             0
@@ -213,7 +217,9 @@ impl Router {
 
         // The token gates every control route, and only the control routes: the static
         // assets hold no secrets, and the page needs them before it has a token to send.
-        if request.path.starts_with("/api/") {
+        // Use the router's exact segment interpretation. Raw-prefix checks allow
+        // alternate spellings such as //api/projects to reach an ungated route.
+        if request.segments().first() == Some(&"api") {
             let presented = request
                 .header("authorization")
                 .and_then(|value| value.strip_prefix("Bearer "))
@@ -278,6 +284,45 @@ pub fn problem(status: u16, code: &str, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn every_routable_api_spelling_requires_a_launch_token() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-auth-regression-{}-{}",
+            std::process::id(),
+            token::mint().unwrap()
+        ));
+        let server = Server::bind(Workspace::open(&root).unwrap(), 0).unwrap();
+        let router = Router {
+            state: server.state,
+        };
+        for path in [
+            "/api/projects",
+            "//api/projects",
+            "///api//session",
+            "/api",
+            "//api/shutdown",
+        ] {
+            let mut request = Request {
+                method: "GET".into(),
+                path: path.into(),
+                headers: BTreeMap::from([("host".into(), server.address.to_string())]),
+                body: Vec::new(),
+            };
+            assert_eq!(
+                router.preflight(&request).map(|r| r.status),
+                Some(401),
+                "{path}"
+            );
+            request.headers.insert(
+                "authorization".into(),
+                format!("Bearer {}", router.state.token),
+            );
+            assert!(router.preflight(&request).is_none(), "{path}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn the_csp_forbids_everything_it_does_not_name() {

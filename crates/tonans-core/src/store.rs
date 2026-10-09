@@ -247,9 +247,9 @@ impl Workspace {
 
     /// The directory one export bundle is written to, created if needed.
     ///
-    /// Bundles are keyed by the run's own hash rather than by a timestamp: rerun
-    /// the same project and you overwrite the same bundle, because the contents
-    /// would be identical anyway. Change anything and you get a new one.
+    /// Bundles are keyed by all artifact-determining inputs, including the run
+    /// metadata and sensitivities. An identical export reuses a verified bundle;
+    /// a changed input gets a different key. Existing modified files are preserved.
     pub fn export_dir(&self, project_name: &str, run_key: &str) -> Result<PathBuf> {
         let project = safe_name("project name", project_name)?;
         let key = safe_name("run key", run_key)?;
