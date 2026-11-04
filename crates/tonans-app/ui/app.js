@@ -254,14 +254,18 @@ async function openProject(name) {
   document.getElementById('tabs').classList.remove('hidden');
   document.getElementById('project-name').textContent = project.name;
 
+  renderProjectSummary(project);
+
+  await refreshProjects();
+  show(project.dataset ? 'scenarios' : 'data');
+}
+
+function renderProjectSummary(project) {
   const dataset = project.dataset;
   document.getElementById('project-summary').textContent = dataset
     ? `${dataset.interval_count.toLocaleString()} intervals of ${dataset.interval_minutes}-minute data · ` +
       `${project.site.timezone} · ${project.scenarios.length} scenario(s) · imported from ${dataset.source.filename}`
     : `${project.site.timezone} · no data imported yet`;
-
-  await refreshProjects();
-  show(dataset ? 'scenarios' : 'data');
 }
 
 function show(view) {
@@ -290,6 +294,8 @@ async function saveProject() {
     state.run = null;
     state.study = null;
     state.studyRequest = null;
+    renderProjectSummary(saved);
+    await refreshProjects();
     toast('Saved. Re-run to refresh results.', null, true);
   }
   return saved;
