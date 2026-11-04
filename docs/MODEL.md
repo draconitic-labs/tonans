@@ -112,6 +112,14 @@ after storage**. Grid-origin battery energy and unknown initial battery energy a
 excluded. Sensitivity cells are complete reruns and use this same definition; a
 metric does not change meaning merely because an input is being swept.
 
+A sensitivity cell varies only the axes shown. Battery energy and battery power do not
+move installed cost by themselves, so a study of battery size either moves it at a stated
+price per kWh of nameplate, or keeps one installed cost in every cell and says in its
+warning ledger that net present value and payback then favour larger batteries. Battery
+power and replacement cost do not move with that price. The interface marks the best of
+the cells tested. That is the best of what was tried, not an optimum, because Tonans does
+not search.
+
 ## Energy identities
 
 Each interval checks the AC-bus identity:

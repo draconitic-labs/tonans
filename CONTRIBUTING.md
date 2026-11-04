@@ -4,6 +4,8 @@ Bug reports, model questions, documentation corrections and focused pull request
 
 By submitting a contribution, you agree that it is licensed under the [Apache License 2.0](LICENSE), as described in section 5 of that license.
 
+The workspace includes the desktop shell, so on Linux the commands below need the WebKitGTK and GTK development packages (`webkit2gtk4.1-devel gtk3-devel libsoup3-devel` on Fedora, `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev` on Debian and Ubuntu). Test interface changes in the native window, not a browser.
+
 Before opening a pull request, run:
 
 ```sh

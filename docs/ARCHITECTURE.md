@@ -1,23 +1,27 @@
 # Architecture
 
-Tonans is two Rust crates compiled into one local Windows application:
+Tonans is three Rust crates:
 
 ```text
-tonans-core   Deterministic model, project store, reports, and exports.
-tonans-app    Loopback HTTP shell, embedded UI, launch token, and audited clock read.
+tonans-core     Deterministic model, project store, reports, and exports.
+tonans-app      Loopback HTTP server, embedded UI, launch token, audited clock read,
+                and the headless `tonans` command.
+tonans-desktop  The application: a Tauri window showing that server's UI, in-process.
 ```
 
 The split is a capability boundary. `tonans-core` owns every numeric dependency and
 has no ambient clock, randomness, or network access. `tonans-app` owns the socket,
 embedded browser assets, launch-time randomness, and the one injected wall-clock
-value used for artifact metadata.
+value used for artifact metadata. `tonans-desktop` adds the window and the few things
+only a native process can do. It reaches the model only through `tonans-app`.
 
 ## `tonans-core`
 
 | Module | Responsibility |
 |---|---|
 | `schema` | Versioned project and separate storable/runnable validation. |
-| `csvimport` | Strict interval import; ambiguity is refused rather than guessed. |
+| `csvimport` | Strict interval import; ambiguity is refused rather than guessed. Mapping suggestions, on request, each with its reason. |
+| `profile` | Sums and extremes of imported data, with no model involved. |
 | `timegrid` | Exact interval grid, timezone resolution, and DST refusal. |
 | `engine` | Fixed-order interval dispatch, limits, losses, source attribution, and outage replay. |
 | `economics` | CAPEX, OPEX, fade approximation, NPV, and payback. |
@@ -57,18 +61,50 @@ changes whenever an unchanged input could produce a different number.
 
 ### HTTP boundary
 
-Tonans serves one browser on loopback, so a small blocking server is easier to audit
+Tonans serves one window on loopback, so a small blocking server is easier to audit
 than an asynchronous framework stack. The listener uses a fixed worker pool and a
 bounded accept queue; a full queue receives a bounded busy response rather than
 creating another thread. Request-line, header-count, physical header-line, and body
 limits are enforced during parsing. An inactivity timeout is supplemented by one
 absolute deadline spanning request-head and body reads.
 
-The parser reads the request head first. `Host`, `Origin`, rate, and control-route
-bearer-token guards run in preflight **before the body is read**. Only an accepted
+The parser reads the request head first. The `Host`, `Origin`, control-route bearer-token,
+and rate guards run in preflight **before the body is read**. Only an accepted
 request proceeds to route-specific `Content-Length` validation and body allocation.
 Chunked request bodies and keep-alive are deliberately unsupported, leaving one
 framing rule and one request per connection.
+
+## `tonans-desktop`
+
+The window loads the UI over HTTP from the server on a thread in the same process, so
+there is one interface and one server and the shell cannot drift from the security
+envelope. Three things in a browser do not carry over to a webview, so the shell provides
+them as commands: saving a file (a native dialog), opening a link (the operating
+system's handler), and quitting. The file picker for CSV import is the webview's own.
+
+| Decision | Why |
+|---|---|
+| The token arrives through an initialization script | It never appears in a URL or history, and a reload still works. The script checks the origin first. |
+| Commands are granted to this launch's exact origin at launch | No capability file exists, and no plugin command is granted. A page on any other origin has nothing to call. |
+| The page names an artifact or a link, never a path or a URL | Paths come from the dialog the user answers; links come from a fixed list. |
+| Navigation is confined to this launch's origin | Anything else is refused, and new windows are denied. |
+| The webview's own small data folder is inside the workspace | One folder holds everything Tonans writes. |
+
+On the NVIDIA driver, WebKitGTK's DMA-BUF renderer leaves the window blank under X11 and
+runs slowly under Wayland, so the shell sets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` before
+the webview starts, unless `WEBKIT_DISABLE_DMABUF_RENDERER` or
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM` is already set. Other drivers keep WebKit's defaults.
+`WEBKIT_DISABLE_DMABUF_RENDERER=0` is the way to ask for WebKit's own behaviour.
+
+`tauri.conf.json`'s `identifier` is the app id. The shell names the program after it
+before GTK starts, which is where GTK takes the Wayland app id from. Tauri's
+`enableGTKAppId` is left off, because it also registers on the session bus and that stops
+a second window from opening. `packaging/linux/` holds the menu entry, which is named after
+the same id so that the desktop can match a window to its launcher and icon. A test checks
+that they agree.
+
+The `tonans` command remains for headless runs and as the HTTP boundary the packaged smoke
+test drives. It never opens a browser.
 
 ## Filesystem boundary
 
@@ -82,8 +118,10 @@ and become visible through an atomic replacement.
 
 ## Toolchain
 
-Tonans targets `x86_64-pc-windows-gnullvm` with llvm-mingw so the release does not
-depend on a Visual Studio installation. `chrono` is built without its clock feature,
+The release package targets `x86_64-pc-windows-gnullvm` with llvm-mingw so it does not
+depend on a Visual Studio installation. That package holds the `tonans` command only; the
+window's Windows dependencies have been built with the default MSVC target in CI and not
+with this toolchain. `chrono` is built without its clock feature,
 and `unsafe_code` is forbidden workspace-wide.
 
 `getrandom` remains pinned to 0.2 because that version reaches the Windows CSPRNG
@@ -103,8 +141,10 @@ personal identity survives.
 
 ## Release-package goal
 
-The release target is a self-contained Windows x64 package whose declared payload
-is sufficient on a clean supported host. The packaging gate must inspect executable
+The release target is a self-contained Windows x64 package of the `tonans` command whose
+declared payload is sufficient on a clean supported host. It does not yet contain the
+desktop window, which also needs the WebView2 runtime. The Linux path is
+`scripts/install-desktop.sh`, which builds from source. The packaging gate must inspect executable
 imports and either prove that only supported Windows system libraries are required
 or include, license, hash, and inventory every runtime file. A smoke test that
 inherits a compiler-toolchain directory on `PATH` is not evidence of that goal.

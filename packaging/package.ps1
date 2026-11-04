@@ -307,6 +307,13 @@ foreach ($crate in $thirdParty) {
         [void]$notices.AppendLine()
     }
 }
+# The interface's typeface is compiled into the binary, so its licence ships too.
+[void]$notices.AppendLine('## Barlow (typeface compiled into the binary, SIL Open Font License 1.1)')
+[void]$notices.AppendLine()
+[void]$notices.AppendLine('```')
+[void]$notices.AppendLine((Get-Content (Join-Path $RepoRoot 'crates\tonans-app\ui\fonts\OFL.txt') -Raw).Trim())
+[void]$notices.AppendLine('```')
+[void]$notices.AppendLine()
 $notices.ToString() | Set-Content (Join-Path $StageDir 'NOTICES.md') -Encoding utf8
 Step "Distinct licence texts embedded: $($seenLicenceText.Count)"
 

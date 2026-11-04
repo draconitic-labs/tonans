@@ -21,10 +21,10 @@ battery-state reference replay pinned to SSC commit
 `86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832`. It is not certification, endorsement,
 or a claim of SAM/SSC parity.
 
-The browser walkthrough of the real DOM (import -> configure -> run -> compare ->
-sensitivity -> export -> reopen) passed on 2026-11-03 against a Linux build of this
-source. `docs/RELEASE-CHECKLIST.md` records the result and what remains before a
-Windows binary is published.
+The walkthrough (import -> configure -> run -> compare -> sensitivity -> export ->
+quit -> relaunch -> reopen) has been done in the native window on Linux with real
+input. It has not been done on Windows. `docs/RELEASE-CHECKLIST.md` records the result
+and what remains before a Windows binary is published.
 
 ## What it is
 
@@ -46,27 +46,55 @@ under the workspace the user selects.
 | `AGENTS.md` | The engineering contract. |
 | `docs/MODEL.md` | Model order, assumptions, metrics, limitations, and validation. |
 | `docs/BENCHMARK.md` | The pinned, normalized SSC battery-state reference replay. |
-| `docs/ARCHITECTURE.md` | Crate boundaries, HTTP design, toolchain, and packaging goal. |
+| `docs/ARCHITECTURE.md` | Crate boundaries, the desktop shell, HTTP design, toolchain, and packaging goal. |
 | `docs/SECURITY.md` | Threat model and defenses in request and filesystem order. |
 | `docs/PRIVACY.md` | What is collected, where data lives, and how to remove it. |
 | `docs/RELEASE-CHECKLIST.md` | Reproducible release gates and their recorded results. |
 | `LICENSE` | Apache License 2.0; third-party components remain under their own licences. |
 
+## Running it
+
+Tonans is a native window: `tonans-desktop` runs the loopback server in-process and
+shows the interface in a Tauri webview. Closing the window ends the application.
+
+On Linux, install it into your applications menu:
+
+```sh
+scripts/install-desktop.sh              # builds a release, then installs under ~/.local
+scripts/install-desktop.sh --uninstall  # removes only the files it recognises as its own
+```
+
+This needs Rust and the WebKitGTK and GTK development packages. The script names them
+if they are missing. Your projects are never touched by installing or uninstalling.
+
+To run it without installing:
+
+```sh
+cargo run --release --locked -p tonans-desktop
+```
+
+The `tonans` command is Tonans without a window. `tonans run --project <NAME>` runs a
+project and writes the export bundle, for scripts. `tonans` alone starts the loopback
+server. It never opens a browser, and it prints the link with its one-launch token only
+to a terminal; `--print-link` asks for it when output is being captured, and is what
+the packaged smoke test uses.
+
 ## Building
 
-On Linux, with the pinned toolchain:
+On Linux, with the pinned toolchain and the packages above:
 
 ```sh
 cargo test --workspace --all-targets --locked
-cargo run --release --locked -p tonans-app
 ```
 
-Windows x64, with the llvm-mingw toolchain:
+On Windows x64 the whole workspace, including the window, builds with the default MSVC
+Rust target, which is what CI uses. The release package uses the llvm-mingw toolchain
+and builds the `tonans` command only:
 
 ```powershell
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
-cargo +stable-x86_64-pc-windows-gnullvm test --workspace --all-targets --locked
-cargo +stable-x86_64-pc-windows-gnullvm clippy --workspace --all-targets --locked -- -D warnings
+cargo +stable-x86_64-pc-windows-gnullvm test -p tonans-core -p tonans-app --all-targets --locked
+cargo +stable-x86_64-pc-windows-gnullvm clippy -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
 ```
 
 ## Packaging
@@ -77,8 +105,12 @@ cargo +stable-x86_64-pc-windows-gnullvm clippy --workspace --all-targets --locke
 .\packaging\smoke.ps1
 ```
 
-These scripts build and verify a local release candidate. They do not publish,
-upload, install, or create a shortcut. A binary is published only after
-the integrated gates and browser walkthrough pass against that exact package.
+These scripts build and verify a local release candidate of the `tonans` command. They
+do not publish, upload, install, or create a shortcut. The package does not contain the
+desktop window yet. A binary is published only after the integrated gates and the
+walkthrough pass against that exact package.
+
+The interface's typeface is Barlow, under the SIL Open Font License, compiled into the
+binary from `crates/tonans-app/ui/fonts`.
 
 Support: `support@flintglade.com`.

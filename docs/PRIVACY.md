@@ -28,10 +28,12 @@ assumptions, your results, or the fact that Tonans is installed.
 One folder, per user, not roamed:
 
 ```
-%LOCALAPPDATA%\Flintglade\Tonans
+%LOCALAPPDATA%\Flintglade\Tonans                 on Windows
+$XDG_DATA_HOME/Flintglade/Tonans                  on Linux, which is usually
+~/.local/share/Flintglade/Tonans                  this
 ```
 
-You can put it somewhere else with `Tonans.exe --workspace <DIR>`.
+You can put it somewhere else with `--workspace <DIR>`.
 
 It contains:
 
@@ -39,15 +41,17 @@ It contains:
 |---|---|
 | `*.tonans.json` | Your projects: the imported interval data, your assumptions, your scenarios. Plain JSON. |
 | `exports/` | Export bundles you asked for: the HTML report, CSV, JSON, the provenance manifest, and checksums. |
+| `webview/` | The desktop window's own small data folder. It runs in incognito mode, so this holds no project data, history, or cookies. |
 
 Uploaded CSV bytes are held **in memory only** while you map the columns, and are
 discarded when the import completes or you abandon it. The file you selected is
 never copied into the workspace; only the data you actually imported, and a SHA-256
 digest of the bytes it came from, is stored.
 
-Browser-driven project and export writes stay in the workspace. The headless CLI
-can also write an export to the directory you explicitly choose with `--out`;
-remove that directory separately when uninstalling. Tonans creates no registry
+Project and export writes from the interface stay in the workspace. The desktop window
+can also save a copy of an export wherever you choose in a save dialog, and the headless
+CLI can write one to the directory you explicitly choose with `--out`; those copies are
+yours, and uninstalling does not touch them. Tonans creates no registry
 keys, services, scheduled tasks, or shell extensions. For workspace operations, names
 are validated and joined beneath the workspace root, and the join is re-checked
 against the resolved parent so that a symlink planted in the workspace cannot
@@ -55,7 +59,9 @@ redirect a write.
 
 ## Removing your data
 
-Delete the workspace folder. Delete `Tonans.exe`. That is the whole uninstall.
+Delete the workspace folder and the program. On Linux, if you installed the desktop app,
+`scripts/install-desktop.sh --uninstall` removes the program, menu entry, and icons, and
+leaves the workspace for you to remove yourself. On Windows:
 
 ```powershell
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Flintglade\Tonans"
@@ -68,7 +74,7 @@ need to ask us to delete your project data, because it was never sent to us.
 
 Tonans opens exactly one socket: a TCP listener on `127.0.0.1`, on a port the
 operating system chooses. That socket serves the user interface — which is compiled
-into the executable — to your browser, and nothing else.
+into the executable — to the window, and nothing else.
 
 It makes **no outbound connections at all.**
 
@@ -76,9 +82,11 @@ You are welcome to confirm this. Run it behind a firewall that blocks everything
 or watch it with Resource Monitor, Process Monitor, or Wireshark. Nothing will
 happen, which is the intended result.
 
-The one thing Tonans asks the operating system to do outside itself is open your
-browser at the loopback URL on launch. `Tonans.exe --no-browser` suppresses even
-that.
+Tonans starts no other program by itself, and it never opens a browser at its own
+interface. In the desktop window, the operating system is asked to open something only
+when you click for it: the file manager on an export, or your default handler for the
+source-code link or the support address, and that link can leave your machine if you
+follow it.
 
 ## What leaves your machine, if you choose to send it
 

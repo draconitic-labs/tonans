@@ -83,10 +83,14 @@ maintainer endorsement, or evidence of full SAM/SSC parity.
 ```powershell
 cargo +stable-x86_64-pc-windows-gnullvm fmt --all -- --check
 cargo +stable-x86_64-pc-windows-gnullvm clippy `
-  --workspace --all-targets --locked -- -D warnings
+  -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
 cargo +stable-x86_64-pc-windows-gnullvm test `
-  --workspace --all-targets --locked
+  -p tonans-core -p tonans-app --all-targets --locked
 ```
+
+The package holds the `tonans` command, so these name its crates. The desktop shell is
+gated separately in CI, which runs the same three commands with `--workspace` on Ubuntu and
+on the default Windows target.
 
 These gates have passed during the hardening cycle and must pass again after
 integration. The workspace forbids unsafe code and denies `todo!`, `unimplemented!`,
