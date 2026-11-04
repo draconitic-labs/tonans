@@ -62,6 +62,8 @@ const WINDOW: &str = "main";
 const KEEP_WORKING: &str = "Keep working";
 /// The quit dialog's answer that loses work.
 const QUIT_WITHOUT_SAVING: &str = "Quit without saving";
+/// The quit dialog's answer to Escape and to closing the dialog, which also keeps working.
+const CANCEL_QUITTING: &str = "Cancel";
 
 /// What the commands need from the running server.
 struct Shell {
@@ -433,17 +435,19 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
     api.prevent_close();
 
     let closing = window.clone();
-    // Keep working comes first because the first button takes Enter, and closing the
-    // dialog any other way reports neither label, so only a deliberate click discards.
+    // Three buttons, so that only a deliberate click discards. The first takes Enter. The last
+    // takes Escape and closing the dialog: on Linux the dialog plugin reports those as the
+    // label in the cancel slot, so with two buttons Escape would be whichever is second.
     window
         .dialog()
         .message("This project has changes you have not saved. They are lost if you quit now.")
         .title("Quit without saving?")
         .kind(MessageDialogKind::Warning)
         .parent(window)
-        .buttons(MessageDialogButtons::OkCancelCustom(
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
             KEEP_WORKING.to_string(),
             QUIT_WITHOUT_SAVING.to_string(),
+            CANCEL_QUITTING.to_string(),
         ))
         .show_with_result(move |answer| {
             if discards_unsaved_work(&answer) {
@@ -657,6 +661,7 @@ mod tests {
         // Enter, Escape, and closing the dialog report these.
         for answer in [
             MessageDialogResult::Custom(KEEP_WORKING.to_string()),
+            MessageDialogResult::Custom(CANCEL_QUITTING.to_string()),
             MessageDialogResult::Cancel,
             MessageDialogResult::Ok,
             MessageDialogResult::Yes,
@@ -664,6 +669,21 @@ mod tests {
         ] {
             assert!(!discards_unsaved_work(&answer), "{answer:?}");
         }
+    }
+
+    #[test]
+    fn the_discarding_answer_is_never_in_the_slot_escape_reports() {
+        // The plugin reports Escape as the label in the cancel slot on Linux, which a click
+        // on the real dialog found. Two custom buttons have no third slot to keep it safe.
+        let source = include_str!("main.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        assert!(!code.contains("OkCancelCustom"));
+        let at = code.find("YesNoCancelCustom").unwrap();
+        let order = &code[at..at + 200];
+        let keep = order.find("KEEP_WORKING").unwrap();
+        let quit = order.find("QUIT_WITHOUT_SAVING").unwrap();
+        let cancel = order.find("CANCEL_QUITTING").unwrap();
+        assert!(keep < quit && quit < cancel, "{order}");
     }
 
     #[test]
