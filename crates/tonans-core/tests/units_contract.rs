@@ -17,7 +17,6 @@ use std::fmt::Write as _;
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
 use serde_json::Value;
 use tonans_core::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
-use tonans_core::licensing::Entitlements;
 use tonans_core::run::{self, RunResult};
 use tonans_core::schema::{
     BatterySpec, BenefitScaling, DegradationSpec, DispatchPolicy, EconomicsSpec, GapPolicy,
@@ -542,9 +541,7 @@ fn populated_project() -> Project {
 }
 
 fn populated_run() -> RunResult {
-    // Analyst entitlements, so that one run can carry all four dispatch policies:
-    // the evaluation tier stops at three scenarios, and a policy that is never run
+    // One run carries all four dispatch policies, and a policy that is never run
     // is a policy whose numbers this contract never sees.
-    run::run_project(&populated_project(), Entitlements::analyst(), now())
-        .expect("the fixture project runs")
+    run::run_project(&populated_project(), now()).expect("the fixture project runs")
 }
