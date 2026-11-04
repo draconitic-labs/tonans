@@ -514,6 +514,14 @@ fn main() -> ExitCode {
 
     prepare_webview_environment();
 
+    let context = tauri::generate_context!();
+    // Under Wayland, GTK takes the window's app id from the program name, and the desktop
+    // uses that id to find the launcher and icon. Tauri's own `enableGTKAppId` would set it
+    // too, but it also makes GTK register on the session bus, which stops a second window
+    // from opening.
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some(context.config().identifier.as_str()));
+
     let workspace = options.workspace;
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -539,7 +547,7 @@ fn main() -> ExitCode {
             }
             Ok(())
         })
-        .build(tauri::generate_context!());
+        .build(context);
 
     let app = match app {
         Ok(app) => app,
@@ -619,6 +627,43 @@ mod tests {
         assert_eq!(
             config["app"]["security"]["capabilities"],
             serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn the_menu_entry_is_named_after_the_app_id() {
+        // Under Wayland the desktop connects a window to its launcher and icon through a
+        // `.desktop` file named after the app id. If they differ, the window gets a
+        // generic icon and the taskbar cannot match it to its launcher.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let identifier = config["identifier"].as_str().unwrap();
+        // The include! path itself is half of this check: the file must have this name.
+        assert_eq!(identifier, "com.flintglade.tonans");
+        let entry = include_str!("../../../packaging/linux/com.flintglade.tonans.desktop");
+        assert!(entry.contains(&format!("\nIcon={identifier}\n")), "{entry}");
+        assert!(
+            entry.contains(&format!("\nStartupWMClass={identifier}\n")),
+            "{entry}"
+        );
+        let installer = include_str!("../../../scripts/install-desktop.sh");
+        assert!(installer.contains(&format!("APP_ID=\"{identifier}\"\n")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scripts_the_readme_runs_directly_are_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        // A fresh clone gets the mode recorded in git, so in CI this checks the commit.
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/install-desktop.sh"
+        );
+        let mode = std::fs::metadata(script).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o755,
+            0o755,
+            "scripts/install-desktop.sh is not executable"
         );
     }
 

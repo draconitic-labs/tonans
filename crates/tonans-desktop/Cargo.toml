@@ -27,6 +27,10 @@ tauri = { version = "2", features = ["custom-protocol"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 
+# Already in the tree through GTK. Used for one call: naming the program after the app id.
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

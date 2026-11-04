@@ -3989,6 +3989,7 @@ dependencies = [
 name = "tonans-desktop"
 version = "0.1.0"
 dependencies = [
+ "glib",
  "serde",
  "serde_json",
  "tauri",
