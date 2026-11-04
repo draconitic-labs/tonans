@@ -22,10 +22,10 @@ battery-state reference replay pinned to SSC commit
 `86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832`. It is not certification, endorsement,
 or a claim of SAM/SSC parity.
 
-The remaining user-visible release gate is the operator's browser walkthrough of
-the real DOM: import -> configure -> run -> compare -> sensitivity -> export ->
-reopen. The API and packaged-binary path underneath that workflow are tested, but
-automated API coverage is not a substitute for clicking the screens.
+The browser walkthrough of the real DOM (import -> configure -> run -> compare ->
+sensitivity -> export -> reopen) passed on 2026-11-03 against a Linux build of this
+source. `docs/RELEASE-CHECKLIST.md` records the result and what remains before a
+Windows binary is published.
 
 Sales remain disabled. There is no purchase flow, licence key, activation server,
 Stripe catalog entry, or payment integration in the executable. Every current build
@@ -54,7 +54,7 @@ under the workspace the user selects.
 | `docs/ARCHITECTURE.md` | Crate boundaries, HTTP design, toolchain, and packaging goal. |
 | `docs/SECURITY.md` | Threat model and defenses in request and filesystem order. |
 | `docs/PRIVACY.md` | What is collected, where data lives, and how to remove it. |
-| `docs/RELEASE-CHECKLIST.md` | Reproducible gates and the remaining operator step. |
+| `docs/RELEASE-CHECKLIST.md` | Reproducible release gates and their recorded results. |
 | `TERMS.md` | Proposed licence tiers and pricing; sales are disabled. |
 | `LICENSE.md` | Proprietary software licence; third-party components remain under their own licences. |
 
@@ -77,7 +77,7 @@ cargo +stable-x86_64-pc-windows-gnullvm clippy --workspace --all-targets --locke
 ```
 
 These scripts build and verify a local release candidate. They do not publish,
-upload, install, enable sales, or create a shortcut. Publication remains a deliberate
-human decision after the integrated gates and operator walkthrough pass.
+upload, install, enable sales, or create a shortcut. A binary is published only after
+the integrated gates and browser walkthrough pass against that exact package.
 
 Support: `support@flintglade.com`.
