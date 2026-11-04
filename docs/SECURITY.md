@@ -92,6 +92,10 @@ addition:
   only two things: the user's default handler for a named link, and the file manager on an
   export. Each happens on an explicit click.
 
+A handler that panics gets the client a 500 and leaves the server running, rather than
+aborting the process and with it any unsaved work in the window. The 500 carries no panic
+text.
+
 ## Embedded and exported UI
 
 Interface assets are compiled into the executable. They reference no CDN, remote font,
@@ -139,15 +143,20 @@ their filename are refused rather than silently loaded under another identity.
 
 Writes use unique temporary files followed by atomic replacement, so concurrent or
 interrupted writes do not share a predictable staging path or expose a partial JSON
-document.
+document. A save must name the revision it was made from, the SHA-256 of the project file
+it read, and is refused with 409 if that is no longer what is on disk, so one window cannot
+silently overwrite another's. The check and the write hold an advisory lock on
+`.tonans-write-lock`, which is itself refused if it is a link. A file saved over through the
+desktop dialog keeps its permissions and, if it is a link, its target.
 
 ## Dependencies and unsafe code
 
 The server uses a small blocking `std::net` HTTP surface instead of an asynchronous
 framework stack, and the headless command links nothing else. The desktop shell adds
 Tauri and its tree, which is far larger and is why the server does not depend on it. The
-exact locked dependency tree, not a prose count, is the source of truth. `unsafe_code` is forbidden workspace-wide, `cargo audit`
-runs as a release gate, and the shipped package includes a CycloneDX SBOM and the
+exact locked dependency tree, not a prose count, is the source of truth. `unsafe_code` is forbidden workspace-wide, `cargo audit
+--deny warnings` runs as a release gate with each accepted advisory recorded in
+`docs/RELEASE-CHECKLIST.md`, and the shipped package includes a CycloneDX SBOM and the
 applicable third-party licence texts.
 
 ## Package and runtime boundary

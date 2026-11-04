@@ -39,13 +39,14 @@ It contains:
 
 | | |
 |---|---|
-| `*.tonans.json` | Your projects: the imported interval data, your assumptions, your scenarios. Plain JSON. |
+| `projects/*.tonans.json` | Your projects: the imported interval data, your assumptions, your scenarios. Plain JSON. |
 | `exports/` | Export bundles you asked for: the HTML report, CSV, JSON, the provenance manifest, and checksums. |
+| `.tonans-write-lock` | An empty file that keeps two windows from writing at once. |
 | `webview/` | The desktop window's own small data folder. It runs in incognito mode, so this holds no project data, history, or cookies. |
 
 Uploaded CSV bytes are held **in memory only** while you map the columns, and are
-discarded when the import completes or you abandon it. The file you selected is
-never copied into the workspace; only the data you actually imported, and a SHA-256
+discarded when the import completes, or when you abandon it by pressing Cancel, opening
+another project, or quitting. The file you selected is never copied into the workspace; only the data you actually imported, and a SHA-256
 digest of the bytes it came from, is stored.
 
 On Linux, system libraries keep a few files of their own outside that folder, as they do

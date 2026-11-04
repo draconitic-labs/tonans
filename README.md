@@ -50,6 +50,7 @@ under the workspace the user selects.
 | `docs/SECURITY.md` | Threat model and defenses in request and filesystem order. |
 | `docs/PRIVACY.md` | What is collected, where data lives, and how to remove it. |
 | `docs/RELEASE-CHECKLIST.md` | Reproducible release gates and their recorded results. |
+| `CHANGELOG.md` | Changes that affect what Tonans tells you, including results that were wrong. |
 | `LICENSE` | Apache License 2.0; third-party components remain under their own licences. |
 
 ## Running it

@@ -53,7 +53,7 @@ changes whenever an unchanged input could produce a different number.
 | `http` | HTTP/1.1 parsing, fixed worker pool, bounded accept queue, deadlines, and response writing. |
 | `server` | Routing and request guards: loopback/Host, Origin, rate, bearer token, and response headers. |
 | `api` | Control routes that accept project names, never arbitrary paths. |
-| `assets` | UI bytes embedded in the executable and scanned for unsafe DOM or remote-origin use. |
+| `assets` | UI bytes embedded in the executable and scanned for unsafe DOM or remote-origin use. The page's rules are in `ui/logic.mjs`, with no page in them, and `ui-tests/` runs them under Node. |
 | `token` | Per-launch 256-bit OS-CSPRNG token, never persisted, constant-time comparison. |
 | `state` | Workspace, staged upload slot, and request-rate window. |
 | `demo` | Bundled demonstration project installed through the real importer. |
@@ -73,6 +73,19 @@ and rate guards run in preflight **before the body is read**. Only an accepted
 request proceeds to route-specific `Content-Length` validation and body allocation.
 Chunked request bodies and keep-alive are deliberately unsupported, leaving one
 framing rule and one request per connection.
+
+A panicking handler does not take the application down. Each request runs inside
+`catch_unwind`, the client gets a 500 with the code `http.internal`, and the worker goes on
+to its next connection. The release profile therefore unwinds, and a test holds it to that.
+A lock poisoned by such a panic is recovered, because what it guards stays valid.
+
+Two windows on one workspace are two processes, so a project's revision is the SHA-256 of
+its file. Every read returns it in `x-tonans-revision`. A save must send it, and gets 428
+without it and 409 with an old one, so a stale window cannot overwrite data another window
+imported. A run, a study, or an export that sends it is refused the same way. Checking and
+writing happen under an advisory lock on `<workspace>/.tonans-write-lock`. The page tags each
+of those requests with the project and revision it was made from, and drops an answer that
+no longer matches what is on screen.
 
 ## `tonans-desktop`
 

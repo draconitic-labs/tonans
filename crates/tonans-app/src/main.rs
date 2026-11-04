@@ -34,7 +34,9 @@ Tonans — microgrid scenario workbench, without a window
 
 Options:
   --workspace <DIR>   Where projects and exports live.
-                      Default: %LOCALAPPDATA%\\Flintglade\\Tonans
+                      Default: a folder for this user, Flintglade/Tonans under
+                      %LOCALAPPDATA% on Windows and under $XDG_DATA_HOME or
+                      ~/.local/share elsewhere.
   --port <PORT>       Loopback port. Default: 0, meaning the operating system
                       chooses one, which keeps it from being a fixed target.
   --print-link        Print the link with its one-launch token even when output is
@@ -370,8 +372,8 @@ mod tests {
 
     #[test]
     fn this_command_never_starts_another_program() {
-        // The owner's rule, and the point of the native window: nothing in this binary
-        // may launch a browser. It spawns no process of any kind.
+        // The point of the native window: nothing in this binary may launch a browser.
+        // It spawns no process of any kind.
         let source = include_str!("main.rs");
         let code = source.split("#[cfg(test)]").next().unwrap();
         assert!(!code.contains("process::Command"));
