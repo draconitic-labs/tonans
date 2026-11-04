@@ -1,6 +1,6 @@
 # Release checklist - Tonans release candidate
 
-**Status: not published, not for sale, and reserved for operator testing.**
+**Status: no binary release, not for sale, and reserved for operator testing.**
 
 The numeric public-reference gate and final integrated automated gates are closed for
 the exact operator-test artifact below. The operator's real-browser DOM walkthrough
@@ -17,7 +17,7 @@ Verified 2026-07-13:
 - CycloneDX 1.5 JSON Schema validation passed with the official SPDX and JSF schemas;
 - Grok 4.5 maximum reasoning and an independent fresh-context Codex review both
   returned GO for the exact reviewed source and archive digest; and
-- Authenticode status is intentionally `NotSigned` for this private operator test.
+- Authenticode status is intentionally `NotSigned` for this operator test.
 
 Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 
