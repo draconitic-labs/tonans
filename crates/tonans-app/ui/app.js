@@ -20,6 +20,12 @@
  *     report cannot drift away from the UI.
  */
 
+import {
+  encodeFileNameHeader,
+  resultsStatus,
+  sendTagged,
+} from '/logic.mjs';
+
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
@@ -30,6 +36,13 @@ const state = {
   session: null,
   projects: [],
   project: null,
+  /** The digest of the project file this window last read or wrote. */
+  revision: null,
+  /** True once this window has seen a different revision on disk. */
+  changedElsewhere: false,
+  /** Bumped by each open, so the slower of two opens cannot replace the newer. */
+  openTicket: 0,
+  saving: null,
   profile: null,
   savedJson: '',
   reportedUnsaved: false,
@@ -40,6 +53,7 @@ const state = {
   openSections: new Set(['battery', 'dispatch']),
   diffOpen: false,
   run: null,
+  runStamp: null,
   resultsHash: null,
   timelines: {},
   detail: null,
@@ -56,7 +70,8 @@ const state = {
   mappingReviewed: false,
   importError: null,
   justImported: null,
-  busy: false,
+  /** The request in flight, as `{ what, project, revision }`, or null. */
+  busy: null,
 };
 
 /** Take the launch token and keep it in memory only. */
@@ -79,20 +94,31 @@ function claimToken() {
   }
 }
 
-async function api(path, { method = 'GET', body, raw, filename } = {}) {
+/** Send a request. Resolves with the parsed body and the project revision it was about. */
+async function request(path, { method = 'GET', body, raw, filename, revision } = {}) {
   const headers = { Authorization: `Bearer ${state.token}` };
   let payload;
   if (raw) {
     headers['Content-Type'] = 'text/csv';
-    headers['X-Tonans-Filename'] = filename || 'upload.csv';
+    headers['X-Tonans-Filename'] = encodeFileNameHeader(filename || 'upload.csv');
     payload = raw;
   } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
+  if (revision) headers['X-Tonans-Revision'] = revision;
 
-  const response = await fetch(path, { method, headers, body: payload });
-  const text = await response.text();
+  let response;
+  let text;
+  try {
+    response = await fetch(path, { method, headers, body: payload });
+    text = await response.text();
+  } catch {
+    // All a page gets from a dropped connection is a TypeError saying "Load failed".
+    const error = new Error('Tonans could not get an answer from its own local server. Nothing was changed by this request. Try again, or restart Tonans.');
+    error.code = 'ui.no_answer';
+    throw error;
+  }
   let parsed = null;
   try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
 
@@ -101,7 +127,33 @@ async function api(path, { method = 'GET', body, raw, filename } = {}) {
     error.code = parsed?.code || `http.${response.status}`;
     throw error;
   }
-  return parsed;
+  return { body: parsed, revision: response.headers.get('x-tonans-revision') };
+}
+
+async function api(path, options) {
+  return (await request(path, options)).body;
+}
+
+/** What this window believes it is showing, to tag a request with and to check its answer. */
+const currentStamp = () => ({ project: state.project?.name ?? null, revision: state.revision });
+
+function markBusy(what, stamp) {
+  state.busy = { what, project: stamp.project, revision: stamp.revision };
+  return state.busy;
+}
+
+/** Only the request that set the mark can clear it: a save or an open may have moved on. */
+function releaseBusy(mark) {
+  if (state.busy === mark) state.busy = null;
+}
+
+const BUSY_LABEL = { run: 'Running…', study: 'Running…', export: 'Writing…' };
+
+/** Say that an answer arrived too late to show. */
+function dropLate(what, stamp) {
+  toast(stamp.project === state.project?.name
+    ? `The ${what} finished after the project changed, so it is not shown. Run it again for the current assumptions.`
+    : `The ${what} of "${stamp.project}" finished after you left it, so it is not shown.`, 'ui.late_result');
 }
 
 const projectPath = (suffix = '') =>
@@ -228,11 +280,22 @@ function toast(message, code, ok = false, action = null) {
   toast.timer = setTimeout(() => node.classList.add('hidden'), ok ? 5000 : 12000);
 }
 
+/** Tell the user about a failure, in the one way each kind needs. */
+function reportFailure(error) {
+  if (error.code === 'conflict.project_changed') {
+    state.changedElsewhere = true;
+    redrawForChange();
+    offerReopen();
+    return;
+  }
+  toast(error.message, error.code);
+}
+
 async function guard(work) {
   try {
     return await work();
   } catch (error) {
-    toast(error.message, error.code);
+    reportFailure(error);
     return null;
   }
 }
@@ -269,13 +332,72 @@ async function settleUnsaved(what) {
       el('button', { type: 'button', text: 'Save', class: 'primary', onclick: () => close('save') }),
     ]));
   });
-  if (choice === 'save') return Boolean(await saveProject());
+  // A save that fails says why, and leaves the user where they were.
+  if (choice === 'save') return ensureSaved();
   if (choice === 'discard') {
     restoreEditable(state.savedJson);
     syncUnsaved();
     return true;
   }
   return false;
+}
+
+/**
+ * Another window got there first. Nothing has been overwritten on either side, and the
+ * safe answer is the one Enter gives: stay, with the edits still on screen to copy.
+ */
+async function offerReopen() {
+  if (document.getElementById('dialog').open) {
+    toast('This project was changed somewhere else. Nothing was saved.', 'conflict.project_changed');
+    return;
+  }
+  const unsaved = isUnsaved();
+  const choice = await openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: 'This project was changed somewhere else' }));
+    dialog.appendChild(el('p', { text:
+      'Probably in another Tonans window. Nothing was saved or run from here, and the other change is intact.' }));
+    dialog.appendChild(el('p', { text: unsaved
+      ? 'Reopening loads the latest version and drops the unsaved changes on this screen. Keep working if you want to copy them first.'
+      : 'Reopening loads the latest version.' }));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+      el('button', { type: 'button', text: 'Reopen the project', class: 'primary', onclick: () => close('reopen') }),
+    ]));
+  });
+  if (choice !== 'reopen') return;
+  restoreEditable(state.savedJson);
+  syncUnsaved();
+  await openProject(state.project.name);
+}
+
+/** Has anyone else written this project? Asked on focus and on each change of screen. */
+async function checkForOutsideChange() {
+  const stamp = currentStamp();
+  if (!stamp.project) return;
+  const found = await api(`/api/projects/${encodeURIComponent(stamp.project)}/revision`).catch(() => null);
+  if (!found || state.project?.name !== stamp.project || state.revision !== stamp.revision) return;
+  const changed = found.revision !== stamp.revision;
+  if (changed === state.changedElsewhere) return;
+  state.changedElsewhere = changed;
+  redrawForChange();
+}
+
+/** Bring back into line every screen that says how current its contents are. */
+function redrawForChange() {
+  if (!state.project) return;
+  renderBus();
+  const redraw = { results: renderResults, sensitivity: renderSensitivity, export: renderExport }[state.view];
+  if (redraw) redraw();
+}
+
+/** A sentence about how far to trust what a screen shows, or nothing if it is all current. */
+function staleNotice(unsavedText) {
+  if (state.changedElsewhere) {
+    return el('div', { class: 'banner', text:
+      'This project was changed somewhere else after this window read it. What is shown here is from the version ' +
+      'this window opened, and saving from here would be refused. Reopen the project to see the latest.' });
+  }
+  return isUnsaved() ? el('div', { class: 'banner', text: unsavedText }) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +442,7 @@ async function boot() {
   document.getElementById('new-project').addEventListener('click', newProject);
   document.addEventListener('keydown', onKey);
   document.addEventListener('focusout', () => { state.editKey = null; });
+  window.addEventListener('focus', checkForOutsideChange);
 
   await refreshProjects();
   if (state.projects.length) await openProject(state.projects[0].name);
@@ -415,16 +538,18 @@ function timezoneInput(value) {
 
 async function openProject(name) {
   if (!(await settleUnsaved(`open ${name}`))) return;
-  const project = await guard(() => api(`/api/projects/${encodeURIComponent(name)}`));
-  if (!project) return;
+  const ticket = ++state.openTicket;
+  const reply = await guard(() => request(`/api/projects/${encodeURIComponent(name)}`));
+  if (!reply || ticket !== state.openTicket) return;
+  const project = reply.body;
+  forgetStagedUpload();
   state.project = project;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
   state.profile = null;
-  state.run = null;
-  state.resultsHash = null;
-  state.study = null;
-  state.studyRequest = null;
+  dropDerivedResults();
+  state.timelines = {};
   state.sens = null;
-  state.bundle = null;
   state.upload = null;
   state.mapping = null;
   state.importError = null;
@@ -436,7 +561,11 @@ async function openProject(name) {
   state.detail = null;
   markSaved();
 
-  if (project.dataset) state.profile = await guard(() => api(projectPath('/profile')));
+  if (project.dataset) {
+    const profile = await guard(() => api(projectPath('/profile')));
+    if (ticket !== state.openTicket) return;
+    state.profile = profile;
+  }
 
   document.getElementById('empty-state').classList.add('hidden');
   document.getElementById('bus').classList.remove('hidden');
@@ -480,6 +609,7 @@ function show(view, { keepScroll = false } = {}) {
   if (render) render();
   renderBus();
   if (!keepScroll) document.getElementById('views').scrollTop = 0;
+  checkForOutsideChange();
 }
 
 // ---------------------------------------------------------------------------
@@ -491,17 +621,18 @@ function stepStates() {
   const dataset = project.dataset;
   const count = project.scenarios.length;
   const unsaved = isUnsaved();
+  const old = state.changedElsewhere ? ', out of date' : (unsaved ? ', from the last save' : '');
   return [
     { view: 'data', name: '1 Data', done: Boolean(dataset),
       note: dataset ? `${dataset.interval_count.toLocaleString()} intervals` : 'Nothing imported' },
     { view: 'scenarios', name: '2 Scenarios', done: count > 1 && !unsaved,
       note: `${count} scenario${count === 1 ? '' : 's'}${unsaved ? ', unsaved' : ''}` },
     { view: 'results', name: '3 Results', done: Boolean(state.run),
-      note: state.run ? (unsaved ? 'From the last save' : 'Current') : 'Not run' },
+      note: resultsStatus(state.runStamp, currentStamp(), { unsaved, changedElsewhere: state.changedElsewhere }) },
     { view: 'sensitivity', name: '4 Sensitivity', done: Boolean(state.study),
-      note: state.study ? `${state.study.cells.length} cells` : 'Optional' },
+      note: state.study ? `${state.study.cells.length} cells${old}` : 'Optional' },
     { view: 'export', name: '5 Export', done: Boolean(state.bundle),
-      note: state.bundle ? `${state.bundle.artifacts.length} files written` : 'Nothing written' },
+      note: state.bundle ? `${state.bundle.artifacts.length} files written${old}` : 'Nothing written' },
   ];
 }
 
@@ -532,6 +663,10 @@ function renderBus() {
 /** The next useful thing, in one line, with the button that does it. */
 function nextStep() {
   const project = state.project;
+  if (state.changedElsewhere) {
+    return { text: 'This project was changed somewhere else, probably in another window.',
+             label: 'Reopen the project', run: offerReopen };
+  }
   if (!project.dataset) {
     return state.upload
       ? { text: 'Map every column below, then import.' }
@@ -581,12 +716,23 @@ function editableJson() {
   return JSON.stringify({ scenarios, baseline, notes: notes ?? '' });
 }
 
-function restoreEditable(json) {
+function restoreEditable(json, selected = state.selected) {
   const { scenarios, baseline, notes } = JSON.parse(json);
   state.project.scenarios = scenarios;
   state.project.baseline_scenario_id = baseline;
   state.project.notes = notes;
-  if (!scenarios.some((s) => s.id === state.selected)) state.selected = scenarios[0]?.id ?? null;
+  state.selected = scenarios.some((s) => s.id === selected) ? selected : (scenarios[0]?.id ?? null);
+}
+
+/** Everything that was worked out from a saved project. All of it goes when that changes. */
+function dropDerivedResults() {
+  state.run = null;
+  state.runStamp = null;
+  state.resultsHash = null;
+  state.study = null;
+  state.studyRequest = null;
+  state.bundle = null;
+  state.busy = null;
 }
 
 function isUnsaved() {
@@ -672,7 +818,13 @@ function firstInvalidField() {
   return document.querySelector('.view:not(.hidden) input[aria-invalid="true"]');
 }
 
-async function saveProject() {
+/** One save at a time: a second would carry a revision the first is about to replace. */
+function saveProject() {
+  if (!state.saving) state.saving = writeProject().finally(() => { state.saving = null; });
+  return state.saving;
+}
+
+async function writeProject() {
   const invalid = firstInvalidField();
   if (invalid) {
     invalid.closest('details')?.setAttribute('open', '');
@@ -681,9 +833,11 @@ async function saveProject() {
     failure.code = 'ui.blank_number';
     throw failure;
   }
-  let saved;
+  const stamp = currentStamp();
+  const sent = editableJson();
+  let reply;
   try {
-    saved = await api(projectPath(), { method: 'PUT', body: state.project });
+    reply = await request(projectPath(), { method: 'PUT', body: state.project, revision: stamp.revision });
   } catch (error) {
     // Point at the scenario the error names, rather than leaving the reader to hunt.
     const named = /scenario\[([^\]]+)\]/.exec(error.message);
@@ -693,23 +847,28 @@ async function saveProject() {
     }
     throw error;
   }
-  state.project = saved;
+  if (state.project?.name !== stamp.project) return reply.body;
+  // Anything typed while the save was on its way is not in it, and is still unsaved.
+  const typedSince = editableJson() === sent ? null : editableJson();
+  state.project = reply.body;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
   // Results were produced from the old assumptions and are now stale. Throwing them
   // away is the only honest thing to do: a chart next to assumptions it was not
   // produced from is worse than no chart.
-  state.run = null;
-  state.resultsHash = null;
-  state.study = null;
-  state.studyRequest = null;
-  state.bundle = null;
+  dropDerivedResults();
   markSaved();
-  renderProjectSummary(saved);
+  if (typedSince) {
+    restoreEditable(typedSince);
+    syncUnsaved();
+  }
+  renderProjectSummary(reply.body);
   // The inputs on screen are bound to the object just replaced. Redraw them, or the
   // next edit changes that old object and the next save silently drops it.
   show(state.view, { keepScroll: true });
   toast('Saved. Run again to refresh results.', null, true);
   await refreshProjects();
-  return saved;
+  return reply.body;
 }
 
 /**
@@ -722,7 +881,7 @@ async function ensureSaved() {
     await saveProject();
     return true;
   } catch (error) {
-    toast(error.message, error.code);
+    reportFailure(error);
     return false;
   }
 }
@@ -922,6 +1081,12 @@ function receiveUpload(receipt) {
   state.justImported = null;
   renderData();
   renderNext();
+}
+
+/** Tell the server to drop the file it is holding, now rather than at the next upload. */
+function forgetStagedUpload() {
+  if (!state.upload) return;
+  api('/api/upload/cancel', { method: 'POST', body: { upload_id: state.upload.upload_id } }).catch(() => {});
 }
 
 async function saveTemplate() {
@@ -1295,9 +1460,10 @@ async function runImport(receipt) {
 
   if (!(await settleUnsaved('import this file'))) return;
 
-  let result;
+  const into = state.project.name;
+  let reply;
   try {
-    result = await api(projectPath('/import'), {
+    reply = await request(projectPath('/import'), {
       method: 'POST',
       body: {
         upload_id: receipt.upload_id,
@@ -1311,23 +1477,34 @@ async function runImport(receipt) {
       },
     });
   } catch (error) {
+    if (state.project?.name !== into) {
+      toast(`The import into "${into}" failed: ${error.message}`, error.code);
+      return;
+    }
     // An import error names the row and column to fix, so it stays on screen.
     state.importError = { code: error.code, message: error.message };
     renderData();
     return;
   }
+  // The file went into the project it was meant for, whichever one is on screen now.
+  if (state.project?.name !== into) {
+    toast(`Finished importing into "${into}".`, null, true);
+    await refreshProjects();
+    return;
+  }
 
+  const result = reply.body;
   state.project = result.project;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
   state.upload = null;
   state.mapping = null;
   state.importError = null;
-  state.run = null;
-  state.resultsHash = null;
-  state.study = null;
-  state.studyRequest = null;
-  state.bundle = null;
+  dropDerivedResults();
   markSaved();
-  state.profile = await guard(() => api(projectPath('/profile')));
+  const profile = await guard(() => api(projectPath('/profile')));
+  if (state.project?.name !== into) return;
+  state.profile = profile;
   state.justImported = result.import;
   renderProjectSummary(state.project);
   await refreshProjects();
@@ -2316,12 +2493,18 @@ function addScenario() {
 async function runAll() {
   if (state.busy || !state.project?.dataset) return;
   if (!(await ensureSaved())) return;
-  state.busy = true;
-  show('results');
-  const result = await guard(() => api(projectPath('/run'), { method: 'POST' }));
-  state.busy = false;
-  if (result) {
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('run', stamp);
+    show('results');
+    return guard(() => request(projectPath('/run'), { method: 'POST', revision: stamp.revision }))
+      .finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    dropLate('run', stamp);
+  } else if (reply) {
+    const result = reply.body;
     state.run = result.run;
+    state.runStamp = stamp;
     state.resultsHash = result.results_hash;
     state.timelines = Object.fromEntries(result.timelines.map((t) => [t.scenario_id, t]));
     if (!result.run.scenarios.some((s) => s.scenario_id === state.detail)) {
@@ -2343,9 +2526,9 @@ function renderResults() {
   }
 
   const go = el('button', { class: state.run ? '' : 'primary', type: 'button',
-                            text: state.busy ? 'Running…' : (state.run ? 'Run again' : 'Run all scenarios'),
+                            text: state.busy ? BUSY_LABEL[state.busy.what] : (state.run ? 'Run again' : 'Run all scenarios'),
                             onclick: runAll });
-  go.disabled = state.busy;
+  go.disabled = Boolean(state.busy);
   root.appendChild(el('div', {}, [
     el('h3', { text: 'Results' }),
     el('div', { class: 'row' }, [
@@ -2359,10 +2542,8 @@ function renderResults() {
   if (!state.run) return;
   const run = state.run;
 
-  if (isUnsaved()) {
-    root.appendChild(el('div', { class: 'banner', text:
-      'You have unsaved changes. These results are from the last saved assumptions. Running again saves first.' }));
-  }
+  const notice = staleNotice('You have unsaved changes. These results are from the last saved assumptions. Running again saves first.');
+  if (notice) root.appendChild(notice);
 
   root.appendChild(warningSection(run));
   root.appendChild(comparisonSection(run));
@@ -3286,8 +3467,8 @@ function renderSensitivity() {
       'Battery power does not change installed cost in this study. Add installed cost as the other axis to see both move.' }));
   }
 
-  const go = el('button', { class: 'primary', type: 'button', text: state.busy ? 'Running…' : 'Run sensitivity', onclick: () => runStudy() });
-  go.disabled = state.busy;
+  const go = el('button', { class: 'primary', type: 'button', text: state.busy ? BUSY_LABEL[state.busy.what] : 'Run sensitivity', onclick: () => runStudy() });
+  go.disabled = Boolean(state.busy);
   const count = el('span', { class: 'tiny muted' });
   const countCells = () => {
     const cells = parseValues(settings.v1).values.length * (settings.p2 ? parseValues(settings.v2).values.length : 1);
@@ -3297,6 +3478,10 @@ function renderSensitivity() {
   values1.addEventListener('input', countCells);
   values2.addEventListener('input', countCells);
   box.appendChild(el('div', { class: 'row' }, [go, count]));
+  const notice = staleNotice(state.study
+    ? 'You have unsaved changes. This study is from the last saved assumptions. Running it again saves first.'
+    : 'You have unsaved changes. Running a study saves them first.');
+  if (notice) root.appendChild(notice);
   root.appendChild(box);
 
   if (!state.study) return;
@@ -3318,7 +3503,7 @@ async function runStudy() {
   }
   const axes = [{ param: settings.p1, values: first.values }];
   if (settings.p2) axes.push({ param: settings.p2, values: second.values });
-  const request = { scenario_id: settings.scenario, axes };
+  const body = { scenario_id: settings.scenario, axes };
 
   const energyAxis = settings.p1 === 'battery_energy_kwh' || settings.p2 === 'battery_energy_kwh';
   const costAxis = settings.p1 === 'capex_usd' || settings.p2 === 'capex_usd';
@@ -3328,17 +3513,21 @@ async function runStudy() {
       toast('Enter the installed cost per kWh, or turn off moving it with battery energy.', 'ui.bad_cost_rate');
       return;
     }
-    request.capex_usd_per_kwh = rate;
+    body.capex_per_kwh_usd = rate;
   }
 
   if (!(await ensureSaved())) return;
-  state.busy = true;
-  renderSensitivity();
-  const study = await guard(() => api(projectPath('/sensitivity'), { method: 'POST', body: request }));
-  state.busy = false;
-  if (study) {
-    state.study = study;
-    state.studyRequest = request;
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('study', stamp);
+    renderSensitivity();
+    return guard(() => request(projectPath('/sensitivity'), { method: 'POST', body, revision: stamp.revision }))
+      .finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    dropLate('study', stamp);
+  } else if (reply) {
+    state.study = reply.body;
+    state.studyRequest = body;
     state.bundle = null;
   }
   if (state.view === 'sensitivity') renderSensitivity();
@@ -3542,16 +3731,21 @@ function heatTable(study, metric) {
 async function runExport() {
   if (state.busy) return;
   if (!(await ensureSaved())) return;
-  state.busy = true;
-  renderExport();
-  const bundle = await guard(() => api(projectPath('/export'), {
-    method: 'POST',
-    body: { sensitivity: state.studyRequest },
-  }));
-  state.busy = false;
-  if (bundle) {
-    state.bundle = bundle;
-    toast(`Wrote ${bundle.artifacts.length} files.`, null, true);
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('export', stamp);
+    renderExport();
+    return guard(() => request(projectPath('/export'), {
+      method: 'POST',
+      body: { sensitivity: state.studyRequest },
+      revision: stamp.revision,
+    })).finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    toast(`The export of "${stamp.project}" finished after the project changed. It describes the earlier version and is in ` +
+      `${reply.body.directory}. Export again for the current one.`, 'ui.late_result');
+  } else if (reply) {
+    state.bundle = reply.body;
+    toast(`Wrote ${reply.body.artifacts.length} files.`, null, true);
   }
   if (state.view === 'export') renderExport();
   renderBus();
@@ -3566,8 +3760,10 @@ function renderExport() {
   }
 
   const go = el('button', { class: state.bundle ? '' : 'primary', type: 'button',
-                            text: state.busy ? 'Writing…' : (state.bundle ? 'Export again' : 'Export bundle'), onclick: runExport });
-  go.disabled = state.busy;
+                            text: state.busy ? BUSY_LABEL[state.busy.what] : (state.bundle ? 'Export again' : 'Export bundle'), onclick: runExport });
+  go.disabled = Boolean(state.busy);
+  const notice = staleNotice('You have unsaved changes. Exporting saves them first.');
+  if (notice) root.appendChild(notice);
   root.appendChild(el('section', { class: 'stack' }, [
     el('div', {}, [
       el('h3', { text: 'Export' }),

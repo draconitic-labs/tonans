@@ -186,6 +186,29 @@ mod tests {
     }
 
     #[test]
+    fn every_request_that_produces_a_result_is_tagged_and_can_be_dropped_when_late() {
+        // The rule itself is tested under Node in `ui-tests/logic.test.mjs`. This is what
+        // ties it to the page: run, study, and export each go through it and send their
+        // revision, so none of them can show an answer about a state that has gone.
+        let code = code_only(SCRIPT);
+        for route in ["/run", "/sensitivity", "/export"] {
+            let at = code
+                .find(&format!("projectPath('{route}')"))
+                .unwrap_or_else(|| panic!("no request to {route}"));
+            let before = &code[at.saturating_sub(220)..at];
+            let after = &code[at..(at + 200).min(code.len())];
+            assert!(before.contains("sendTagged("), "{route}: {before}");
+            assert!(
+                after.contains("revision: stamp.revision"),
+                "{route}: {after}"
+            );
+        }
+        // And the one word that claims results are current comes from the one rule.
+        assert!(!code.contains("'Current'"));
+        assert!(LOGIC.contains("'Current'"));
+    }
+
+    #[test]
     fn import_mapping_requires_explicit_meaning_and_unit_choices() {
         assert!(SCRIPT.contains("['__unmapped', 'Choose meaning…']"));
         assert!(SCRIPT.contains("['__timestamp', 'Timestamp']"));
