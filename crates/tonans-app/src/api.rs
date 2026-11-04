@@ -212,6 +212,19 @@ pub fn open_project(state: &AppState, name: &str) -> Response {
     respond_at_revision(state.workspace.load_project_at_revision(name))
 }
 
+/// `GET /api/projects/{name}/revision`
+///
+/// How a window finds out that another one has changed its project, so that it can stop
+/// calling what it shows current before it next tries to write.
+pub fn project_revision(state: &AppState, name: &str) -> Response {
+    respond(
+        state
+            .workspace
+            .project_revision(name)
+            .map(|revision| serde_json::json!({ "revision": revision })),
+    )
+}
+
 /// `PUT /api/projects/{name}`
 ///
 /// The body replaces the whole project, dataset included, so a save must say which

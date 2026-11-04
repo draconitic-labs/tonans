@@ -195,6 +195,35 @@ fn a_stale_window_cannot_delete_data_another_window_imported() {
 }
 
 #[test]
+fn a_window_can_ask_for_the_revision_without_reading_the_project() {
+    let root = workspace_root("ask");
+    let first = Window::open(&root);
+    let second = Window::open(&root);
+    first.create("Site");
+    let (_, opened) = first.open_project("Site");
+    let ask = |window: &Window| {
+        let (status, _, text) = window.send("GET", "/api/projects/Site/revision", None, "");
+        assert_eq!(status, 200, "{text}");
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+        body["revision"].as_str().unwrap().to_string()
+    };
+    assert_eq!(ask(&first), opened);
+
+    let imported = second.import("Site");
+    assert_eq!(
+        ask(&first),
+        imported,
+        "the other window's write shows at once"
+    );
+    assert_ne!(imported, opened);
+
+    // The same refusal as opening it.
+    let (status, _, text) = first.send("GET", "/api/projects/Nowhere/revision", None, "");
+    assert_eq!(status, 422, "{text}");
+    assert!(text.contains("schema.project_not_found"), "{text}");
+}
+
+#[test]
 fn a_save_that_does_not_name_a_revision_is_refused() {
     let root = workspace_root("missing");
     let a = Window::open(&root);

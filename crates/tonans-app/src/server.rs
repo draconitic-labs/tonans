@@ -271,6 +271,7 @@ impl Router {
             ("POST", ["api", "upload", "suggest"]) => api::suggest_mapping(state, request),
             ("GET", ["api", "templates", "interval-csv"]) => api::csv_template(),
             ("GET", ["api", "projects", name, "profile"]) => api::profile(state, name),
+            ("GET", ["api", "projects", name, "revision"]) => api::project_revision(state, name),
             ("POST", ["api", "projects", name, "import"]) => api::import(state, name, request),
             ("POST", ["api", "projects", name, "run"]) => api::run(state, name, request),
             ("POST", ["api", "projects", name, "sensitivity"]) => {

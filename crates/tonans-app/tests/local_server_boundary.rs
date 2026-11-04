@@ -49,6 +49,7 @@ const READING: &[&str] = &[
     "/api/projects",
     "/api/projects/Demo%20-%20Riverside%20Works",
     "/api/projects/Demo%20-%20Riverside%20Works/profile",
+    "/api/projects/Demo%20-%20Riverside%20Works/revision",
     "/api/templates/interval-csv",
 ];
 

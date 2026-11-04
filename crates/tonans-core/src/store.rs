@@ -197,6 +197,33 @@ impl Workspace {
     /// Two windows on one workspace are two processes, and this is how they notice each
     /// other.
     pub fn load_project_at_revision(&self, name: &str) -> Result<(Project, String)> {
+        let bytes = self.read_project_bytes(name)?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| Error::Schema {
+            code: "schema.unreadable",
+            message: format!("the project file for '{name}' is not UTF-8: {e}"),
+        })?;
+        let project = migrate(text)?;
+        if project.name != name {
+            return Err(Error::Schema {
+                code: "schema.project_name_mismatch",
+                message: format!(
+                    "the project file named '{name}' identifies itself as '{}'. Tonans will not \
+                     load or rewrite a project under a different name.",
+                    project.name
+                ),
+            });
+        }
+        Ok((project, hash_bytes(&bytes).bare_hex().to_string()))
+    }
+
+    /// The revision of a project on disk, without parsing it. Cheap enough for a window to
+    /// ask whenever it comes back into focus.
+    pub fn project_revision(&self, name: &str) -> Result<String> {
+        let bytes = self.read_project_bytes(name)?;
+        Ok(hash_bytes(&bytes).bare_hex().to_string())
+    }
+
+    fn read_project_bytes(&self, name: &str) -> Result<Vec<u8>> {
         let path = self.project_path(name)?;
         let metadata = fs::metadata(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -216,24 +243,7 @@ impl Workspace {
                 format!("the project file for '{name}' is larger than Tonans will open"),
             ));
         }
-        let bytes =
-            fs::read(&path).map_err(|e| Error::io(format!("reading the project '{name}'"), e))?;
-        let text = std::str::from_utf8(&bytes).map_err(|e| Error::Schema {
-            code: "schema.unreadable",
-            message: format!("the project file for '{name}' is not UTF-8: {e}"),
-        })?;
-        let project = migrate(text)?;
-        if project.name != name {
-            return Err(Error::Schema {
-                code: "schema.project_name_mismatch",
-                message: format!(
-                    "the project file named '{name}' identifies itself as '{}'. Tonans will not \
-                     load or rewrite a project under a different name.",
-                    project.name
-                ),
-            });
-        }
-        Ok((project, hash_bytes(&bytes).bare_hex().to_string()))
+        fs::read(&path).map_err(|e| Error::io(format!("reading the project '{name}'"), e))
     }
 
     /// Hold the workspace's write lock until the returned guard drops.
