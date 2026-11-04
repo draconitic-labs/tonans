@@ -134,3 +134,44 @@ fn a_size_axis_leaves_the_baseline_alone_so_the_cell_matches_a_run() {
     assert!((result.cells[0].metrics.npv_usd - npv).abs() < 0.005);
     assert!((result.cells[0].metrics.installed_cost_usd - 220_000.0).abs() < 0.005);
 }
+
+/// With the rate the page sends, a study's cell at the scenario's own size is that
+/// scenario's results to the cent, including after its cost has been edited, and with a
+/// cost and size that do not divide into a whole number. The page used to round the rate
+/// and to keep the first one it saw.
+#[test]
+fn a_study_at_the_exact_rate_matches_results_to_the_cent() {
+    for (capex, nameplate) in [(220_000.0, 400.0), (440_000.0, 400.0), (123_457.0, 333.3)] {
+        let mut project = demo::build(now()).unwrap();
+        let scenario = project
+            .scenarios
+            .iter_mut()
+            .find(|s| s.id == "peak-limit")
+            .unwrap();
+        scenario.economics.capex_usd = capex;
+        scenario.battery.as_mut().unwrap().nameplate_energy_kwh = nameplate;
+
+        let results = run::run_project(&project, now()).unwrap();
+        let expected = results.scenario("peak-limit").unwrap().economics.npv_usd;
+
+        let study = sensitivity::run(
+            &project,
+            &SensitivityRequest {
+                scenario_id: "peak-limit".to_string(),
+                axes: vec![SensitivityAxis {
+                    param: SensitivityParam::BatteryEnergyKwh,
+                    values: vec![nameplate],
+                }],
+                capex_per_kwh_usd: Some(capex / nameplate),
+            },
+        )
+        .unwrap();
+        let cell = &study.cells[0].metrics;
+        assert!(
+            (cell.npv_usd - expected).abs() < 0.005,
+            "at {capex} USD and {nameplate} kWh the cell reads {} and Results reads {expected}",
+            cell.npv_usd
+        );
+        assert!((cell.installed_cost_usd - capex).abs() < 0.005);
+    }
+}

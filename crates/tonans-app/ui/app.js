@@ -21,10 +21,16 @@
  */
 
 import {
+  chooseStudyAxis,
+  chooseStudyScenario,
   encodeFileNameHeader,
   fileTooLarge,
+  formatAxis,
+  hasPriceAxis,
+  parseValues,
   resultsStatus,
   sendTagged,
+  studySettings,
 } from '/logic.mjs';
 
 // ---------------------------------------------------------------------------
@@ -3360,47 +3366,8 @@ const METRICS = [
   { id: 'payback', title: 'Simple payback', unit: 'years', read: (m) => m.simple_payback_years ?? null, scale: 'sequential', better: 'low', format: fmt.years },
 ];
 
-/** Read a comma-separated list strictly: one unreadable entry refuses the whole list. */
-function parseValues(raw) {
-  const parts = raw.split(',').map((part) => part.trim()).filter((part) => part !== '');
-  const values = parts.map(Number);
-  const bad = parts.filter((_, index) => !Number.isFinite(values[index]));
-  return { ok: bad.length === 0, bad, values };
-}
-
-/** Values around the scenario's own, so a study starts from where the scenario is. */
-function axisDefaults(param, scenario) {
-  const around = (value, factors, digits = 0) => factors.map((f) => Number((value * f).toFixed(digits))).join(', ');
-  const b = scenario?.battery;
-  switch (param) {
-    case 'battery_energy_kwh': return b ? around(b.nameplate_energy_kwh, [0.5, 1, 1.5, 2]) : '200, 400, 600, 800';
-    case 'battery_power_kw': return b ? around(b.max_discharge_kw, [0.5, 1, 1.5]) : '50, 100, 150';
-    case 'reserve_soc_pct': return '10, 20, 30, 50';
-    case 'initial_capacity_pct': return '70, 80, 90, 100';
-    case 'import_price_multiplier': return '0.8, 1, 1.2, 1.5';
-    case 'demand_price_per_kw_month_usd': return '5, 10, 15, 20';
-    case 'calendar_fade_pct_per_year': return '0.5, 1, 2, 3';
-    case 'capex_usd': return around(scenario?.economics.capex_usd || 100000, [0.5, 0.75, 1, 1.25]);
-    case 'discount_rate_pct_per_year': return '4, 6, 8, 10';
-    default: return '';
-  }
-}
-
 function sensitivitySettings() {
-  if (state.sens) return state.sens;
-  const scenarios = state.project.scenarios;
-  const start = scenarios.find((s) => s.battery && s.id !== state.project.baseline_scenario_id)
-    ?? scenarios.find((s) => s.battery) ?? scenarios[0];
-  state.sens = {
-    scenario: start.id,
-    p1: 'battery_energy_kwh',
-    v1: axisDefaults('battery_energy_kwh', start),
-    p2: 'battery_power_kw',
-    v2: axisDefaults('battery_power_kw', start),
-    scale: start.economics.capex_usd > 0,
-    rate: start.battery && start.economics.capex_usd > 0
-      ? String(Math.round(start.economics.capex_usd / start.battery.nameplate_energy_kwh)) : '',
-  };
+  state.sens = studySettings(state.sens, state.project.scenarios, state.project.baseline_scenario_id);
   return state.sens;
 }
 
@@ -3412,6 +3379,10 @@ function renderSensitivity() {
     return;
   }
   const settings = sensitivitySettings();
+  if (!settings) {
+    root.appendChild(el('div', { class: 'banner', text: 'Add a scenario first.' }));
+    return;
+  }
   const scenarioOf = () => state.project.scenarios.find((s) => s.id === settings.scenario);
 
   const box = el('section', { class: 'stack' });
@@ -3430,26 +3401,19 @@ function renderSensitivity() {
   values2.disabled = !settings.p2;
 
   scenarioPick.addEventListener('change', () => {
-    settings.scenario = scenarioPick.value;
-    const scenario = scenarioOf();
-    settings.v1 = axisDefaults(settings.p1, scenario);
-    settings.v2 = settings.p2 ? axisDefaults(settings.p2, scenario) : '';
-    settings.rate = scenario.battery && scenario.economics.capex_usd > 0
-      ? String(Math.round(scenario.economics.capex_usd / scenario.battery.nameplate_energy_kwh)) : settings.rate;
+    chooseStudyScenario(settings, scenarioPick.value);
     renderSensitivity();
   });
   axis1.addEventListener('change', () => {
-    settings.p1 = axis1.value;
-    settings.v1 = axisDefaults(axis1.value, scenarioOf());
+    chooseStudyAxis(settings, 1, axis1.value);
     renderSensitivity();
   });
   axis2.addEventListener('change', () => {
-    settings.p2 = axis2.value;
-    settings.v2 = axis2.value ? axisDefaults(axis2.value, scenarioOf()) : '';
+    chooseStudyAxis(settings, 2, axis2.value);
     renderSensitivity();
   });
-  values1.addEventListener('input', () => { settings.v1 = values1.value; });
-  values2.addEventListener('input', () => { settings.v2 = values2.value; });
+  values1.addEventListener('input', () => { settings.v1 = values1.value; settings.v1Edited = true; });
+  values2.addEventListener('input', () => { settings.v2 = values2.value; settings.v2Edited = true; });
 
   box.appendChild(el('div', { class: 'grid' }, [
     field('Scenario to vary', scenarioPick),
@@ -3469,12 +3433,28 @@ function renderSensitivity() {
     scale.checked = settings.scale;
     const rate = el('input', { type: 'number', step: 'any', min: '0', id: 'sens-rate', value: settings.rate });
     rate.disabled = !settings.scale;
-    scale.addEventListener('change', () => { settings.scale = scale.checked; renderSensitivity(); });
-    rate.addEventListener('input', () => { settings.rate = rate.value; });
+    scale.addEventListener('change', () => { settings.scaleChoice = scale.checked; renderSensitivity(); });
+    // Typing a rate is a choice, and it stands until the cost or size it was about changes.
+    // It says so, because at any other rate the scenario's own cell will not match Results.
+    const own = settings.exactRate;
+    const differs = el('p', { class: 'tiny muted' });
+    const syncDiffers = () => {
+      const typed = settings.rateOverride !== null && own !== null && Number(settings.rate) !== own;
+      differs.classList.toggle('hidden', !typed);
+      differs.textContent = typed
+        ? `This scenario's own rate is ${own} USD per kWh. At the rate above, its own size will not match Results.`
+        : '';
+    };
+    syncDiffers();
+    rate.addEventListener('input', () => {
+      settings.rate = rate.value;
+      settings.rateOverride = rate.value;
+      syncDiffers();
+    });
     box.appendChild(el('div', { class: 'stack' }, [
       el('label', { class: 'field-row' }, [scale, el('span', { text: 'Move installed cost with battery energy' })]),
       settings.scale
-        ? el('div', { class: 'grid' }, field('Installed cost (USD per kWh of nameplate)', rate))
+        ? el('div', {}, [el('div', { class: 'grid' }, field('Installed cost (USD per kWh of nameplate)', rate)), differs])
         : el('p', { class: 'tiny muted', text:
           `Every cell keeps this scenario's installed cost of ${fmt.usd(scenarioOf().economics.capex_usd)}, ` +
           'so a larger battery looks better than it is.' }),
@@ -3482,6 +3462,11 @@ function renderSensitivity() {
   } else if (settings.p1 === 'battery_power_kw' || settings.p2 === 'battery_power_kw') {
     box.appendChild(el('p', { class: 'tiny muted', text:
       'Battery power does not change installed cost in this study. Add installed cost as the other axis to see both move.' }));
+  }
+  if (hasPriceAxis([{ param: settings.p1 }, { param: settings.p2 }])) {
+    box.appendChild(el('p', { class: 'tiny muted', text:
+      'A price axis changes the price for the baseline as well, because a price is not something the candidate ' +
+      'chooses. Each cell is what you would get by setting both scenarios to that price and comparing them.' }));
   }
 
   const go = el('button', { class: 'primary', type: 'button', text: state.busy ? BUSY_LABEL[state.busy.what] : 'Run sensitivity', onclick: () => runStudy() });
@@ -3512,6 +3497,7 @@ function renderSensitivity() {
 async function runStudy() {
   if (state.busy) return;
   const settings = sensitivitySettings();
+  if (!settings) return;
   const first = parseValues(settings.v1);
   const second = settings.p2 ? parseValues(settings.v2) : { ok: true, values: [] };
   if (!first.ok || !second.ok) {
@@ -3552,7 +3538,7 @@ async function runStudy() {
 }
 
 function describeCell(study, cell) {
-  return study.axes.map((axis, index) => `${paramLabel(axis.param)} ${grouped(cell.axis_values[index], 0)}`).join(', ');
+  return study.axes.map((axis, index) => `${paramLabel(axis.param)} ${formatAxis(cell.axis_values[index])}`).join(', ');
 }
 
 /** The cells at the best tested value of a metric. Empty if the metric never varies. */
@@ -3570,6 +3556,9 @@ function bestOf(study, metric) {
 
 function bestCells(study) {
   const count = study.cells.length;
+  // A cell on a price axis is a price the site might face, not a design to pick, and copied
+  // into a scenario it would move that scenario's tariff and leave the baseline's behind.
+  const priced = hasPriceAxis(study.axes);
   const items = ['npv', 'peak', 'unmet'].map((id) => {
     const metric = METRICS.find((m) => m.id === id);
     const best = bestOf(study, metric);
@@ -3583,7 +3572,7 @@ function bestCells(study) {
       el('div', { class: 'k', text: `${word} ${metric.title.toLowerCase()}` }),
       el('div', { class: 'v', text: best.value === null ? '—' : metric.format(best.value) }),
       el('div', { class: 'where', text: where }),
-      best.varies && best.cells.length ? el('button', { type: 'button', text: 'Add this cell as a scenario',
+      best.varies && best.cells.length && !priced ? el('button', { type: 'button', text: 'Add this cell as a scenario',
         onclick: () => addCellAsScenario(study, best.cells[0]) }) : null,
     ]);
   });
@@ -3594,7 +3583,8 @@ function bestCells(study) {
       el('p', { class: 'lede', text:
         'These are the best values among the cells you chose. They are not an optimum: Tonans tests only what ' +
         'you list, and a better answer can sit between or beyond these values.' +
-        (npv.value !== null && npv.value < 0 ? ' No tested cell has a positive net present value.' : '') }),
+        (npv.value !== null && npv.value < 0 ? ' No tested cell has a positive net present value.' : '') +
+        (priced ? ' A price is not a choice: read this as how the result moves with the price, not as a cell to pick.' : '') }),
     ]),
     el('div', { class: 'best' }, items),
   ]);
@@ -3612,7 +3602,7 @@ function addCellAsScenario(study, cell) {
     toast(`A project holds up to ${state.session.limits.max_scenarios} scenarios.`, 'limit.scenarios');
     return;
   }
-  const scenario = addCopy(source, `${source.name}, ${cell.axis_values.map((v) => grouped(v, 0)).join(' x ')}`);
+  const scenario = addCopy(source, `${source.name}, ${cell.axis_values.map((v) => formatAxis(v)).join(' x ')}`);
   study.axes.forEach((axis, index) => {
     const value = cell.axis_values[index];
     switch (axis.param) {
@@ -3636,9 +3626,8 @@ function addCellAsScenario(study, cell) {
       default: break;
     }
   });
-  if (study.capex_usd_per_kwh !== undefined && scenario.battery) {
-    scenario.economics.capex_usd = study.capex_usd_per_kwh * scenario.battery.nameplate_energy_kwh;
-  }
+  // The cost the study used for this cell, moved with its size or not.
+  scenario.economics.capex_usd = cell.metrics.installed_cost_usd;
   checkpoint('add a sensitivity cell as a scenario');
   project.scenarios.push(scenario);
   state.selected = scenario.id;
@@ -3695,7 +3684,7 @@ function heatTable(study, metric) {
   const colValues = cols ? cols.values : [null];
   const head = el('tr', {}, [
     el('th', { class: 'axis-name', text: paramLabel(rows.param) }),
-    ...colValues.map((c) => el('th', { text: c === null ? metric.title : grouped(c, c % 1 ? 2 : 0) })),
+    ...colValues.map((c) => el('th', { text: c === null ? metric.title : formatAxis(c) })),
   ]);
   table.appendChild(el('thead', {}, [
     cols ? el('tr', {}, [el('th', {}), el('th', { colspan: String(colValues.length), text: paramLabel(cols.param) })]) : null,
@@ -3704,7 +3693,7 @@ function heatTable(study, metric) {
 
   const body = el('tbody');
   rows.values.forEach((rowValue, r) => {
-    const tr = el('tr', {}, el('th', { scope: 'row', text: grouped(rowValue, rowValue % 1 ? 2 : 0) }));
+    const tr = el('tr', {}, el('th', { scope: 'row', text: formatAxis(rowValue) }));
     colValues.forEach((_, c) => {
       const cell = study.cells[r * colValues.length + c];
       const value = cell ? metric.read(cell.metrics) : null;
@@ -3736,8 +3725,8 @@ function heatTable(study, metric) {
       (best.varies
         ? `The outlined cell${best.cells.length === 1 ? ' is' : 's are'} the ${metric.better === 'high' ? 'highest' : 'lowest'} of those tested.`
         : 'No cell stands out on this measure.') +
-      (study.capex_usd_per_kwh !== undefined
-        ? ` Installed cost moved with battery energy at ${study.capex_usd_per_kwh} USD per kWh.` : '') }),
+      (study.capex_per_kwh_usd != null
+        ? ` Installed cost moved with battery energy at ${study.capex_per_kwh_usd} USD per kWh.` : '') }),
   ]);
 }
 
