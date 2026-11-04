@@ -294,9 +294,13 @@ async function saveProject() {
     state.run = null;
     state.study = null;
     state.studyRequest = null;
+    state.bundle = null;
     renderProjectSummary(saved);
-    await refreshProjects();
+    // The inputs on screen are bound to the object just replaced. Redraw them, or the
+    // next edit changes that old object and the next save silently drops it.
+    show(state.view);
     toast('Saved. Re-run to refresh results.', null, true);
+    await refreshProjects();
   }
   return saved;
 }
