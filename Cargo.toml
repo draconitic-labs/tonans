@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Flintglade <support@flintglade.com>"]
-license = "LicenseRef-Flintglade-Tonans-Commercial"
+license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
