@@ -24,6 +24,10 @@ pub const VENDOR_NAME: &str = "Flintglade";
 /// Support contact printed in reports and in the application.
 pub const SUPPORT_EMAIL: &str = "support@flintglade.com";
 
+/// Where the source lives. Shown as a link the user can choose to open; Tonans itself
+/// never contacts it.
+pub const SOURCE_URL: &str = "https://github.com/flintglade-tools/tonans";
+
 /// The disclaimer that must appear on every screen and in every exported artifact.
 ///
 /// [`crate::report`] and [`crate::provenance`] both embed this verbatim, and the

@@ -205,6 +205,18 @@ pub struct CsvPreview {
     pub row_count: usize,
 }
 
+/// The name the blank interval-data template is offered under.
+pub const TEMPLATE_FILE_NAME: &str = "tonans-interval-template.csv";
+
+/// A blank interval-data template: the columns Tonans can read, and three rows showing
+/// the format of each. The rows are examples of the format, not data about any site.
+pub const TEMPLATE_CSV: &str = "\
+timestamp,load_kw,critical_load_kw,pv_kw,import_price_per_kwh,export_price_per_kwh,demand_period,ambient_c
+2025-01-01T00:00:00-05:00,50.0,15.0,0.0,0.10,0.04,off-peak,2.0
+2025-01-01T01:00:00-05:00,48.5,15.0,0.0,0.10,0.04,off-peak,1.5
+2025-01-01T02:00:00-05:00,47.0,15.0,0.0,0.10,0.04,off-peak,1.0
+";
+
 /// Longest accepted demand-period label.
 const MAX_PERIOD_LABEL_CHARS: usize = 32;
 

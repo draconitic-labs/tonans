@@ -40,6 +40,14 @@ const state = {
 
 /** Take the launch token out of the URL and keep it in memory only. */
 function claimToken() {
+  // The desktop shell hands the token over directly, so it never appears in a URL.
+  const boot = window.__TONANS_BOOT__;
+  if (boot) {
+    state.token = boot.token;
+    state.desktop = Boolean(boot.desktop);
+    delete window.__TONANS_BOOT__;
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
   if (token) {
