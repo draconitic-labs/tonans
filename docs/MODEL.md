@@ -210,8 +210,8 @@ is not SAM certification, an endorsement by SSC or its maintainers, or evidence 
 full SSC/SAM parity. The benchmark document lists the normalization, expected values,
 tolerance, and upstream lines so its limits are auditable.
 
-An independent review by a qualified energy analyst remains desirable before a
-customer relies on Tonans for consequential planning.
+An independent review by a qualified energy analyst remains desirable before anyone
+relies on Tonans for consequential planning.
 
 ## Warnings
 

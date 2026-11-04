@@ -1,6 +1,6 @@
 # Tonans — Microgrid Scenario Workbench
 
-**Version 0.1.0 · Windows x64 · Release candidate · Unsigned · Evaluation tier**
+**Version 0.1.0 · Windows x64 · Release candidate · Unsigned · Apache-2.0**
 
 Tonans compares battery-storage and microgrid planning scenarios on your own
 interval data, on your own machine. It performs deterministic single-bus energy
@@ -128,17 +128,10 @@ cached credentials. See `PRIVACY.md`.
    manifest carrying input hashes, versions, assumptions, warnings, and the limits
    the run happened inside.
 
-## This licence
+## License
 
-This build runs in the **Evaluation** tier: the bundled demonstration project, one
-project of your own, three scenarios, and every result visible. Reports carry a
-notice saying they are for internal evaluation.
-
-**Sales are not enabled in this build.** There is no purchase flow, no licence key
-to enter, no server to activate against, and no payment integration in this
-executable. The Analyst and Commercial tiers described in `TERMS.md` are proposed
-terms, not something you can buy today. Nothing here expires, and nothing phones
-home to check.
+Tonans is open-source software under the Apache License 2.0; see `LICENSE`. `NOTICES.md`
+carries the third-party licenses.
 
 ## Support
 

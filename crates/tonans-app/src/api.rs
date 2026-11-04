@@ -18,7 +18,6 @@ use tonans_core::csvimport::{self, CsvPreview, ImportRequest};
 use tonans_core::engine::IntervalRow;
 use tonans_core::error::{Error, Result};
 use tonans_core::export::{self, ExportBundle};
-use tonans_core::licensing::{Entitlements, Tier};
 use tonans_core::limits::{self, Limits};
 use tonans_core::paths::source_file_name;
 use tonans_core::run::{self, RunResult};
@@ -74,10 +73,6 @@ pub struct Session {
     pub model_version: String,
     /// Project-schema version.
     pub schema_version: u32,
-    /// The entitlement tier in force.
-    pub tier: Tier,
-    /// What it permits.
-    pub entitlements: Entitlements,
     /// The enforced envelope.
     pub limits: Limits,
     /// Where projects are stored. Shown so the user knows where their data is.
@@ -96,8 +91,6 @@ pub fn session(state: &AppState) -> Response {
         app_version: APP_VERSION.to_string(),
         model_version: MODEL_VERSION.to_string(),
         schema_version: SCHEMA_VERSION,
-        tier: state.entitlements.tier,
-        entitlements: state.entitlements,
         limits: Limits::current(),
         workspace: state.workspace.root().display().to_string(),
         demo_project: DEMO_PROJECT_NAME.to_string(),
@@ -159,10 +152,6 @@ pub fn create_project(state: &AppState, request: &Request) -> Response {
                 ),
             ));
         }
-        state
-            .entitlements
-            .check_project_count(state.user_project_count()?)?;
-
         let now = clock::now_utc();
         let project = Project::new(
             token::opaque_id(),
@@ -183,20 +172,10 @@ pub fn open_project(state: &AppState, name: &str) -> Response {
     respond(state.workspace.load_project(name))
 }
 
-fn project_for_use(state: &AppState, name: &str) -> Result<Project> {
-    let project = state.workspace.load_project(name)?;
-    if name != DEMO_PROJECT_NAME {
-        state
-            .entitlements
-            .check_project_usage(state.user_project_count()?)?;
-    }
-    Ok(project)
-}
-
 /// `PUT /api/projects/{name}`
 pub fn save_project(state: &AppState, name: &str, request: &Request) -> Response {
     respond((|| -> Result<Project> {
-        project_for_use(state, name)?;
+        state.workspace.load_project(name)?;
         let mut project: Project = parse_body(request)?;
         if project.name != name {
             return Err(Error::validation(
@@ -206,9 +185,6 @@ pub fn save_project(state: &AppState, name: &str, request: &Request) -> Response
                  project as a side effect of saving it.",
             ));
         }
-        state
-            .entitlements
-            .check_scenario_count(project.scenarios.len())?;
         project.modified_utc = clock::now_utc();
         project.app_version = APP_VERSION.to_string();
         project.model_version = MODEL_VERSION.to_string();
@@ -271,7 +247,7 @@ pub struct ImportBody {
 pub fn import(state: &AppState, name: &str, request: &Request) -> Response {
     respond((|| -> Result<serde_json::Value> {
         let body: ImportBody = parse_body(request)?;
-        let mut project = project_for_use(state, name)?;
+        let mut project = state.workspace.load_project(name)?;
         let staged = state.take_upload(&body.upload_id)?;
 
         // The name the file arrived under wins over anything the body claims, so a
@@ -352,8 +328,8 @@ pub struct RunResponse {
 /// `POST /api/projects/{name}/run`
 pub fn run(state: &AppState, name: &str) -> Response {
     respond((|| -> Result<RunResponse> {
-        let project = project_for_use(state, name)?;
-        let result = run::run_project(&project, state.entitlements, clock::now_utc())?;
+        let project = state.workspace.load_project(name)?;
+        let result = run::run_project(&project, clock::now_utc())?;
 
         let hours = project
             .dataset
@@ -464,8 +440,8 @@ fn timeline_for(scenario_id: &str, rows: &[IntervalRow], hours: f64) -> UiTimeli
 pub fn sensitivity(state: &AppState, name: &str, request: &Request) -> Response {
     respond((|| -> Result<SensitivityResult> {
         let body: SensitivityRequest = parse_body(request)?;
-        let project = project_for_use(state, name)?;
-        sensitivity::run(&project, &body, state.entitlements)
+        let project = state.workspace.load_project(name)?;
+        sensitivity::run(&project, &body)
     })())
 }
 
@@ -492,10 +468,10 @@ pub fn export(state: &AppState, name: &str, request: &Request) -> Response {
             parse_body(request)?
         };
 
-        let project = project_for_use(state, name)?;
-        let result = run::run_project(&project, state.entitlements, clock::now_utc())?;
+        let project = state.workspace.load_project(name)?;
+        let result = run::run_project(&project, clock::now_utc())?;
         let sensitivities = match body.sensitivity {
-            Some(request) => vec![sensitivity::run(&project, &request, state.entitlements)?],
+            Some(request) => vec![sensitivity::run(&project, &request)?],
             None => Vec::new(),
         };
 

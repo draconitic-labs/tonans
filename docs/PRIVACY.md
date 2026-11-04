@@ -15,11 +15,10 @@ claim in it is checkable — the last section says how.
 - No telemetry. No analytics. No crash reporting. No usage counters.
 - No update check, and therefore no request that would reveal your IP address, your
   version, or the fact that you ran the program.
-- No account, no sign-in, no licence activation, no device fingerprint.
+- No account, no sign-in, no device fingerprint.
 - No advertising identifiers, no cookies, no third-party scripts, no fonts fetched
   from anywhere.
-- No payment data of any kind: sales are not enabled in this build and there is no
-  payment integration compiled into the executable.
+- No payment data of any kind: Tonans has no payment integration.
 
 Flintglade does not receive your interval data, your project files, your scenario
 assumptions, your results, or the fact that Tonans is installed.

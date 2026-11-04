@@ -55,24 +55,12 @@ review, not stamped designs or guaranteed savings.
   writes, path confinement, and reparse-point defenses are mandatory.
 - Never accept or emit equipment-control commands.
 
-## Commercial scope
+## Limits
 
-- Evaluation: one seat, bundled demonstration project, one user project, up to three
-  scenarios per project, and up to 25 sensitivity cells per study.
-- Analyst: proposed **$199 one-time**, one seat, unlimited local projects, up to the
-  engine's hard limit of 32 scenarios per project, up to 256 sensitivity cells per
-  study, and full internal-use exports.
-- Commercial: proposed **$999 one-time**, up to five seats, unlimited local projects,
-  the same hard limits of 32 scenarios and 256 sensitivity cells, plus client-facing
-  report rights. Twelve months of updates are included; the purchased major version
-  remains usable.
-- Optional paid pilot or calibration work is separately scoped and never implies
-  validation or certification.
-
-The compiled safety envelope is not an upsell. An entitlement may be more
-restrictive, but it cannot exceed the hard limits. Licensing scaffolding may exist,
-but sales remain disabled and no Stripe catalog entry is created for this release
-candidate.
+A project holds up to 32 scenarios, one run holds up to 420,480 rows (scenarios multiplied
+by intervals), and a sensitivity study runs up to 256 cells. These limits are a safety
+envelope that keeps a run bounded. Exports have no usage restrictions
+beyond the Apache License 2.0.
 
 ## Observable release-ready finish line
 
@@ -92,5 +80,5 @@ candidate.
   signed-or-explicitly-unsigned status, SBOM, notices, checksums, binary/package scan,
   and fresh-context review all recorded against the final integrated artifact.
 - The Windows release candidate is locally launchable from a desktop shortcut but
-  remains unpublished pending the user's manual test and, preferably, independent
-  review by a qualified energy analyst.
+  remains unpublished until the final integrated gates pass. Independent review by a
+  qualified energy analyst is recommended.

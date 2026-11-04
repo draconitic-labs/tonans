@@ -91,7 +91,7 @@ BEGIN
             VALUE "FileDescription", "Tonans - Microgrid Scenario Workbench"
             VALUE "FileVersion", "{version}"
             VALUE "InternalName", "tonans"
-            VALUE "LegalCopyright", "Copyright (C) 2026 Flintglade. All rights reserved."
+            VALUE "LegalCopyright", "Copyright (C) 2026 Flintglade. Licensed under Apache-2.0."
             VALUE "OriginalFilename", "Tonans.exe"
             VALUE "ProductName", "Tonans"
             VALUE "ProductVersion", "{version}"

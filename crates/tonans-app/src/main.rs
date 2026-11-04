@@ -24,7 +24,6 @@ use std::process::ExitCode;
 
 use tonans_core::error::{Error, Result};
 use tonans_core::export;
-use tonans_core::licensing::{BuiltInEvaluation, EntitlementSource};
 use tonans_core::run;
 use tonans_core::store::Workspace;
 use tonans_core::version::{
@@ -100,10 +99,6 @@ fn serve(workspace: Workspace, port: u16, no_browser: bool) -> Result<()> {
 
     println!("{PRODUCT_NAME} {APP_VERSION} (model {MODEL_VERSION})");
     println!("  workspace: {}", server.state.workspace.root().display());
-    println!(
-        "  tier:      {}",
-        BuiltInEvaluation.entitlements().tier.label()
-    );
     println!();
     println!("  Open this link. It carries the one-launch token; without it the API refuses.");
     println!("  {}", server.url);
@@ -156,16 +151,7 @@ fn headless(workspace: Workspace, project: Option<String>, out: Option<PathBuf>)
 
     demo::ensure_installed(&workspace)?;
     let project = workspace.load_project(&name)?;
-    let entitlements = BuiltInEvaluation.entitlements();
-    if name != state::DEMO_PROJECT_NAME {
-        let user_projects = workspace
-            .list_projects()?
-            .into_iter()
-            .filter(|entry| entry.name != state::DEMO_PROJECT_NAME)
-            .count();
-        entitlements.check_project_usage(user_projects)?;
-    }
-    let result = run::run_project(&project, entitlements, clock::now_utc())?;
+    let result = run::run_project(&project, clock::now_utc())?;
 
     let key = export::bundle_key(&project, &result, &[])?;
     let directory = match out {

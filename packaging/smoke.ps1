@@ -23,7 +23,7 @@
       * The control API refuses a request with no token, refuses one with a wrong
         token, and refuses one whose Host header is not the address it bound (the
         DNS-rebinding guard).
-      * With the launch token it answers, and reports the Evaluation tier.
+      * With the launch token it answers, and carries the planning disclaimer.
       * It shuts down when asked, and the process exits.
 #>
 [CmdletBinding()]
@@ -213,18 +213,15 @@ try {
         if ($status -ne 403) { "a cross-origin request returned $status, expected 403" }
     }
 
-    Check 'with the launch token it answers, in the Evaluation tier' {
+    Check 'with the launch token it answers' {
         $response = Invoke-Raw -Method GET -Path '/api/session' -HostHeader "127.0.0.1:$port" -Port $port -Token $token
         $status = Get-Status $response
         if ($status -ne 200) { return "GET /api/session returned $status" }
         $body = ($response -split "`r`n`r`n", 2)[1]
         $session = $body | ConvertFrom-Json
         $problems = @()
-        if ($session.tier -ne 'evaluation') { $problems += "tier is '$($session.tier)', expected evaluation" }
         if (-not $session.disclaimer) { $problems += 'the session carries no disclaimer' }
         if ($session.disclaimer -notmatch 'Planning estimate') { $problems += 'the disclaimer does not lead with the boundary' }
-        # The shipped build must not have licensing wired up.
-        if ($session.entitlements.client_report_rights) { $problems += 'the shipped build claims client-facing report rights' }
         if ($problems) { $problems -join '; ' }
     }
 
@@ -240,7 +237,7 @@ try {
         # The isolated workspace should now hold the demo project; nothing should
         # have been written next to the binary.
         $strays = @(Get-ChildItem $appDir -Recurse -File | Where-Object { $_.Name -notin @(
-            'Tonans.exe', 'README.md', 'LICENSE.md', 'TERMS.md', 'NOTICES.md',
+            'Tonans.exe', 'README.md', 'LICENSE', 'NOTICES.md',
             'PRIVACY.md', 'SECURITY.md', 'MODEL.md', 'BENCHMARK.md',
             'SBOM.cdx.json', 'SHA256SUMS.txt') })
         if ($strays) { 'the application wrote next to its binary: ' + (($strays | ForEach-Object { $_.Name }) -join ', ') }

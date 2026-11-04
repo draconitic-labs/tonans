@@ -17,7 +17,6 @@ use std::fmt::Write as _;
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
 use serde_json::Value;
 use tonans_core::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
-use tonans_core::licensing::Entitlements;
 use tonans_core::run::{self, RunResult};
 use tonans_core::schema::{
     BatterySpec, BenefitScaling, DegradationSpec, DispatchPolicy, EconomicsSpec, GapPolicy,
@@ -56,6 +55,7 @@ const UNITLESS: &[&str] = &[
     "max_csv_columns",
     "max_intervals",
     "max_scenarios",
+    "max_run_rows",
     "max_sensitivity_cells",
     "max_outage_windows",
     // A dimensionless fraction of a file, 0.0..=1.0. A bound, not a measurement.
@@ -542,9 +542,7 @@ fn populated_project() -> Project {
 }
 
 fn populated_run() -> RunResult {
-    // Analyst entitlements, so that one run can carry all four dispatch policies:
-    // the evaluation tier stops at three scenarios, and a policy that is never run
+    // One run carries all four dispatch policies, and a policy that is never run
     // is a policy whose numbers this contract never sees.
-    run::run_project(&populated_project(), Entitlements::analyst(), now())
-        .expect("the fixture project runs")
+    run::run_project(&populated_project(), now()).expect("the fixture project runs")
 }

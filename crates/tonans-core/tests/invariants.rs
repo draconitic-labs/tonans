@@ -21,7 +21,6 @@ use tonans_core::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, Map
 use tonans_core::engine::{
     self, CostSummary, EnergySummary, EngineOptions, IntervalRow, ResolvedInput,
 };
-use tonans_core::licensing::Entitlements;
 use tonans_core::run::{self, RunResult};
 use tonans_core::schema::{
     BatterySpec, DegradationSpec, DispatchPolicy, EconomicsSpec, GapPolicy, InverterSpec,
@@ -622,8 +621,7 @@ fn money(sim: &Simulated<'_>) {
 
 /// Every scenario of the realistic project, checked against every invariant.
 fn flagship() -> RunResult {
-    run::run_project(&flagship_project(), Entitlements::evaluation(), now())
-        .expect("the flagship project runs")
+    run::run_project(&flagship_project(), now()).expect("the flagship project runs")
 }
 
 fn simulated<'a>(result: &'a RunResult, id: &str) -> Simulated<'a> {
@@ -754,8 +752,8 @@ fn the_cost_components_sum_to_the_total() {
 #[test]
 fn the_same_project_run_twice_produces_identical_results() {
     let project = flagship_project();
-    let first = run::run_project(&project, Entitlements::evaluation(), now()).expect("a run");
-    let second = run::run_project(&project, Entitlements::evaluation(), now()).expect("a rerun");
+    let first = run::run_project(&project, now()).expect("a run");
+    let second = run::run_project(&project, now()).expect("a rerun");
 
     assert_eq!(
         first.model_input_hash, second.model_input_hash,
@@ -773,12 +771,7 @@ fn the_same_project_run_twice_produces_identical_results() {
 
     // The injected clock reaches `generated_utc` and nothing else. Rerunning an hour
     // later must not move one number, and `results_hash` is what proves it.
-    let later = run::run_project(
-        &project,
-        Entitlements::evaluation(),
-        now() + TimeDelta::hours(1),
-    )
-    .expect("a later run");
+    let later = run::run_project(&project, now() + TimeDelta::hours(1)).expect("a later run");
     assert_ne!(
         later.generated_utc, first.generated_utc,
         "the injected clock never reached the result"
@@ -796,10 +789,8 @@ fn the_same_project_run_twice_produces_identical_results() {
 
 #[test]
 fn two_independently_built_identical_projects_agree() {
-    let first = run::run_project(&flagship_project(), Entitlements::evaluation(), now())
-        .expect("the first project runs");
-    let second = run::run_project(&flagship_project(), Entitlements::evaluation(), now())
-        .expect("the second project runs");
+    let first = run::run_project(&flagship_project(), now()).expect("the first project runs");
+    let second = run::run_project(&flagship_project(), now()).expect("the second project runs");
 
     assert_eq!(
         first.project_hash, second.project_hash,

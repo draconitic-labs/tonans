@@ -594,7 +594,6 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
-    use crate::licensing::Entitlements;
     use crate::run;
     use crate::schema::{GapPolicy, Project, RateSource, SeriesKind, Site};
     use crate::sensitivity::{self, SensitivityAxis, SensitivityParam, SensitivityRequest};
@@ -648,7 +647,7 @@ mod tests {
         )
         .unwrap();
         project.dataset = Some(dataset);
-        let run = run::run_project(&project, Entitlements::analyst(), now).unwrap();
+        let run = run::run_project(&project, now).unwrap();
         (project, run)
     }
 
@@ -662,7 +661,6 @@ mod tests {
                     values: vec![capex],
                 }],
             },
-            Entitlements::analyst(),
         )
         .unwrap()
     }
@@ -848,7 +846,7 @@ mod tests {
             price_per_kwh_usd: 0.10,
         };
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let run = run::run_project(&project, Entitlements::analyst(), now).unwrap();
+        let run = run::run_project(&project, now).unwrap();
         let scenario = &run.scenarios[0];
         let csv = timeseries_csv(scenario);
         let headers: Vec<_> = csv.lines().next().unwrap().split(',').collect();
