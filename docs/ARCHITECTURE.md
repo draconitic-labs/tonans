@@ -119,4 +119,4 @@ packaging/smoke.ps1            runs the staged package in an isolated workspace 
                                a sanitized runtime environment
 ```
 
-These scripts do not publish, upload, install, enable sales, or create a shortcut.
+These scripts do not publish, upload, install, or create a shortcut.
