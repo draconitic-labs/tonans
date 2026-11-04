@@ -217,7 +217,7 @@ try {
         # The threat is a document of ours pointing a user at a live origin: an
         # analytics endpoint, an update server, a licensing host, a payment page.
         #
-        # NOTICES.md is excluded, and the exclusion is the honest one: its URLs are
+        # NOTICES.md and LICENSE are excluded, and the exclusion is the honest one: their URLs are
         # inside the verbatim text of the Apache-2.0 and MIT licences. Editing a URL
         # out of a licence to satisfy a scanner would alter the licence, which is a
         # worse thing to do than the thing this check exists to prevent.
@@ -225,7 +225,7 @@ try {
         # The binary is excluded too, and for a real reason: it legitimately contains
         # the string "http://" because it formats its own loopback URL. The
         # loopback-only claim is checked separately, below.
-        $ours = @($textFiles | Where-Object { $_.Name -ne 'NOTICES.md' })
+        $ours = @($textFiles | Where-Object { $_.Name -notin @('NOTICES.md', 'LICENSE') })
         $offenders = @()
         foreach ($file in $ours) {
             $content = Get-Content $file.FullName -Raw
