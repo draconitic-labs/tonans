@@ -57,6 +57,8 @@ pub struct AppState {
     pub upload: Mutex<Option<Arc<StagedUpload>>>,
     /// The rate limiter.
     pub rate: Mutex<RateWindow>,
+    /// What the one heavy job is doing, while one is running.
+    pub heavy_job: Mutex<Option<String>>,
     /// Set when the UI asks the server to exit.
     pub stop: Arc<AtomicBool>,
 }
@@ -70,6 +72,7 @@ impl AppState {
             bind,
             upload: Mutex::new(None),
             rate: Mutex::new(RateWindow::new()),
+            heavy_job: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -132,9 +135,42 @@ impl AppState {
         }
     }
 
+    /// Claim the process's one heavy job, or say what is already running.
+    ///
+    /// One run of the largest project allowed peaks near 2.6 GB, and running out of memory
+    /// kills the process, because an allocation failure cannot be caught. So two at once
+    /// would be a way to lose a window's unsaved work, and they are refused rather than
+    /// stacked. The claim ends when the returned value drops, including in a panic.
+    pub fn begin_heavy_job(&self, what: &str, project: &str) -> Result<HeavyJob<'_>> {
+        let mut slot = recover(&self.heavy_job);
+        if let Some(running) = slot.as_ref() {
+            return Err(Error::Conflict {
+                code: "server.busy",
+                message: format!(
+                    "Tonans is already running {running}. It does one of these at a time, so try \
+                     again when that finishes."
+                ),
+            });
+        }
+        *slot = Some(format!("{what} of '{project}'"));
+        Ok(HeavyJob { state: self })
+    }
+
     /// Whether this request is inside the rate limit.
     pub fn allow_request(&self) -> bool {
         recover(&self.rate).allow()
+    }
+}
+
+/// The claim on the one heavy job. See [`AppState::begin_heavy_job`].
+#[must_use]
+pub struct HeavyJob<'a> {
+    state: &'a AppState,
+}
+
+impl Drop for HeavyJob<'_> {
+    fn drop(&mut self) {
+        *recover(&self.state.heavy_job) = None;
     }
 }
 
@@ -180,6 +216,30 @@ impl RateWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_heavy_job_at_a_time_and_a_panic_gives_up_the_claim() {
+        let root = std::env::temp_dir().join(format!("tonans-heavy-{}", std::process::id()));
+        let workspace = Workspace::open(&root).unwrap();
+        let state = AppState::new(workspace, "t".into(), "127.0.0.1:1".parse().unwrap());
+
+        let first = state.begin_heavy_job("a run", "Big").unwrap();
+        let refused = state.begin_heavy_job("a study", "Demo").err().unwrap();
+        assert_eq!(refused.code(), "server.busy");
+        assert_eq!(refused.http_status(), 409);
+        assert!(refused.to_string().contains("a run of 'Big'"), "{refused}");
+        drop(first);
+        let second = state.begin_heavy_job("a study", "Demo").unwrap();
+        drop(second);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _job = state.begin_heavy_job("a run", "Big").unwrap();
+            panic!("boom");
+        }));
+        assert!(result.is_err());
+        assert!(state.begin_heavy_job("a run", "Big").is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn test_state() -> (AppState, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!(

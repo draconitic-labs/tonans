@@ -223,6 +223,49 @@ fn a_window_can_ask_for_the_revision_without_reading_the_project() {
     assert!(text.contains("schema.project_not_found"), "{text}");
 }
 
+/// The review's overlap: Run, click another project, Run. The second is told what is running
+/// rather than stacked on top of it, and works once that has finished.
+#[test]
+fn a_second_heavy_request_is_told_what_is_running() {
+    let root = workspace_root("overlap");
+    let window = Window::open(&root);
+    window.create("Big");
+    window.import("Big");
+    window.create("Other");
+    window.import("Other");
+
+    let job = window.state.begin_heavy_job("a run", "Big").unwrap();
+    for (path, body) in [
+        ("/api/projects/Other/run", ""),
+        (
+            "/api/projects/Other/sensitivity",
+            r#"{"scenario_id":"baseline","axes":[]}"#,
+        ),
+        ("/api/projects/Other/export", "{}"),
+        ("/api/projects/Other/import", r#"{"upload_id":"x"}"#),
+    ] {
+        let (status, _, text) = window.send("POST", path, None, body);
+        assert_eq!(status, 409, "{path}: {text}");
+        assert!(text.contains("server.busy"), "{path}: {text}");
+        assert!(text.contains("a run of 'Big'"), "{path}: {text}");
+    }
+    // Reading and saving go on as usual.
+    let (status, _, _) = window.send("GET", "/api/projects/Other", None, "");
+    assert_eq!(status, 200);
+    let (project, revision) = window.open_project("Other");
+    let (status, _, text) = window.send(
+        "PUT",
+        "/api/projects/Other",
+        Some(&revision),
+        &project.to_string(),
+    );
+    assert_eq!(status, 200, "{text}");
+
+    drop(job);
+    let (status, _, text) = window.send("POST", "/api/projects/Other/run", None, "");
+    assert_eq!(status, 200, "{text}");
+}
+
 #[test]
 fn a_save_that_does_not_name_a_revision_is_refused() {
     let root = workspace_root("missing");

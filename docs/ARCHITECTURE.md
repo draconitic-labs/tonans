@@ -79,7 +79,13 @@ A panicking handler does not take the application down. Each request runs inside
 to its next connection. The release profile therefore unwinds, and a test holds it to that.
 A lock poisoned by such a panic is recovered, because what it guards stays valid.
 
-An import, a run, a study, and an export each work on a thread that ends with the request. A
+An import, a run, a study, and an export are heavy, and one runs at a time per process. A second
+gets 409 `server.busy` saying what is running, rather than stacking up to the eight workers and
+running the machine out of memory. A failed allocation aborts the process, and no `catch_unwind`
+can stop that, so the limit is what protects a window's unsaved edits. `README.md` gives the
+figures. Two windows are two processes, each with its own limit.
+
+Each heavy job works on a thread that ends with the request. A
 run of the largest allowed project allocates about 2.4 GB, and glibc keeps what a thread frees
 for that thread, then hands it to the next thread that starts. So memory is reused from one run
 to the next, rather than each of the eight workers keeping its own copy. Measured on Linux over

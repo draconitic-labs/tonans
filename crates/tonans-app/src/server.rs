@@ -128,6 +128,19 @@ pub struct Router {
     pub state: Arc<AppState>,
 }
 
+/// Do one of the routes that can use gigabytes: one at a time, and on a thread of its own.
+fn heavy(
+    state: &AppState,
+    what: &str,
+    project: &str,
+    work: impl FnOnce() -> Response + Send,
+) -> Response {
+    match state.begin_heavy_job(what, project) {
+        Ok(_job) => http::on_its_own_thread(work),
+        Err(refusal) => api::refused(refusal),
+    }
+}
+
 impl Handler for Router {
     fn preflight(&self, request: &Request) -> Option<Response> {
         self.guard(request).map(Self::secure)
@@ -274,16 +287,22 @@ impl Router {
             ("GET", ["api", "projects", name, "profile"]) => api::profile(state, name),
             ("GET", ["api", "projects", name, "revision"]) => api::project_revision(state, name),
             ("POST", ["api", "projects", name, "import"]) => {
-                http::on_its_own_thread(|| api::import(state, name, request))
+                heavy(state, "an import", name, || {
+                    api::import(state, name, request)
+                })
             }
             ("POST", ["api", "projects", name, "run"]) => {
-                http::on_its_own_thread(|| api::run(state, name, request))
+                heavy(state, "a run", name, || api::run(state, name, request))
             }
             ("POST", ["api", "projects", name, "sensitivity"]) => {
-                http::on_its_own_thread(|| api::sensitivity(state, name, request))
+                heavy(state, "a study", name, || {
+                    api::sensitivity(state, name, request)
+                })
             }
             ("POST", ["api", "projects", name, "export"]) => {
-                http::on_its_own_thread(|| api::export(state, name, request))
+                heavy(state, "an export", name, || {
+                    api::export(state, name, request)
+                })
             }
             ("GET", ["api", "projects", name, "exports", key, artifact]) => {
                 api::download(state, name, key, artifact)

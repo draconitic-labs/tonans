@@ -84,6 +84,11 @@ fn load_for_request(state: &AppState, name: &str, request: &Request) -> Result<(
     }
 }
 
+/// The answer to a request refused before it reached its route.
+pub fn refused(error: Error) -> Response {
+    respond::<()>(Err(error))
+}
+
 fn parse_body<T: for<'de> Deserialize<'de>>(request: &Request) -> Result<T> {
     serde_json::from_slice(&request.body).map_err(|e| Error::Schema {
         code: "schema.bad_request_body",

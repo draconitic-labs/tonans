@@ -80,6 +80,18 @@ server. It never opens a browser, and it prints the link with its one-launch tok
 to a terminal; `--print-link` asks for it when output is being captured, and is what
 the packaged smoke test uses.
 
+### Memory
+
+Memory needed grows with intervals times scenarios. The largest project Tonans allows, 420,480
+rows such as four scenarios of a five-minute year, needs **about 2.6 GB of free memory for a run or
+an export**, on top of the window itself, and works under an address-space limit of 3.5 GiB and not
+under 3 GiB. An hourly year with three scenarios needs far less: about 160 MB.
+
+Each window does one such job at a time, and a second is told what is already running. If the
+computer cannot supply the memory anyway, **Tonans stops at once and that window's unsaved edits
+are lost**. An allocation failure cannot be caught, so save before running the largest projects on
+a machine that is short of memory. Files already saved stay intact.
+
 ## Building
 
 On Linux, with the pinned toolchain and the packages above:

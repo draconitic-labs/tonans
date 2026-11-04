@@ -157,7 +157,28 @@ function releaseBusy(mark) {
   if (state.busy === mark) state.busy = null;
 }
 
-const BUSY_LABEL = { run: 'Running…', study: 'Running…', export: 'Writing…' };
+const BUSY_LABEL = { run: 'Running…', study: 'Running…', export: 'Writing…', import: 'Importing…' };
+const BUSY_NAME = { run: 'a run', study: 'a study', export: 'an export', import: 'an import' };
+
+/** What is running, whichever project is on screen now. The server does one at a time. */
+function busyText() {
+  return `Tonans is still running ${BUSY_NAME[state.busy.what]} of "${state.busy.project}". It does one at a time.`;
+}
+
+/** The note beside a button that is waiting on a job for another project. */
+function busyNote() {
+  if (!state.busy || state.busy.project === state.project?.name) return null;
+  return el('p', { class: 'tiny muted', text: `${busyText()} This button comes back when that finishes.` });
+}
+
+/** A job has finished: bring back every button that was waiting for it. */
+function redrawAfterJob() {
+  if (!state.project) return;
+  const redraw = { results: renderResults, sensitivity: renderSensitivity, export: renderExport }[state.view];
+  if (redraw) redraw();
+  syncImportButton();
+  renderBus();
+}
 
 /** Say that an answer arrived too late to show. */
 function dropLate(what, stamp) {
@@ -677,6 +698,7 @@ function nextStep() {
     return { text: 'This project was changed somewhere else, probably in another window.',
              label: 'Reopen the project', run: offerReopen };
   }
+  if (state.busy && !isUnsaved()) return { text: busyText() };
   if (!project.dataset) {
     return state.upload
       ? { text: 'Map every column below, then import.' }
@@ -742,7 +764,6 @@ function dropDerivedResults() {
   state.study = null;
   state.studyRequest = null;
   state.bundle = null;
-  state.busy = null;
 }
 
 function isUnsaved() {
@@ -1423,6 +1444,8 @@ function syncImportButton() {
   const standing = state.mapping.some((entry) => entry.why);
   review.classList.toggle('hidden', !standing);
   go.disabled = standing && !state.mappingReviewed;
+  if (state.busy) go.disabled = true;
+  go.textContent = state.busy?.what === 'import' ? BUSY_LABEL.import : 'Import';
 }
 
 async function suggestFromHeaders(receipt) {
@@ -1498,9 +1521,14 @@ async function runImport(receipt) {
   const max = Number(document.getElementById('imp-gap-max').value);
   const gap_policy = mode === 'reject' ? { mode: 'reject' } : { mode, max_consecutive_intervals: max };
 
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   if (!(await settleUnsaved('import this file'))) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
 
   const into = state.project.name;
+  const sent = editableJson();
+  const mark = markBusy('import', currentStamp());
+  syncImportButton();
   let reply;
   try {
     reply = await request(projectPath('/import'), {
@@ -1517,6 +1545,8 @@ async function runImport(receipt) {
       },
     });
   } catch (error) {
+    releaseBusy(mark);
+    redrawAfterJob();
     if (state.project?.name !== into) {
       toast(`The import into "${into}" failed: ${error.message}`, error.code);
       return;
@@ -1526,13 +1556,17 @@ async function runImport(receipt) {
     renderData();
     return;
   }
+  releaseBusy(mark);
   // The file went into the project it was meant for, whichever one is on screen now.
   if (state.project?.name !== into) {
+    redrawAfterJob();
     toast(`Finished importing into "${into}".`, null, true);
     await refreshProjects();
     return;
   }
 
+  // Anything typed while the file was being read is not in the reply, and is still unsaved.
+  const typedSince = editableJson() === sent ? null : editableJson();
   const result = reply.body;
   state.project = result.project;
   state.revision = reply.revision;
@@ -1542,6 +1576,10 @@ async function runImport(receipt) {
   state.importError = null;
   dropDerivedResults();
   markSaved();
+  if (typedSince) {
+    restoreEditable(typedSince);
+    syncUnsaved();
+  }
   const profile = await guard(() => api(projectPath('/profile')));
   if (state.project?.name !== into) return;
   state.profile = profile;
@@ -2519,8 +2557,10 @@ function addScenario() {
 // ---------------------------------------------------------------------------
 
 async function runAll() {
-  if (state.busy || !state.project?.dataset) return;
+  if (!state.project?.dataset) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
     const mark = markBusy('run', stamp);
     show('results');
@@ -2540,8 +2580,7 @@ async function runAll() {
         ?? result.run.scenarios[0].scenario_id;
     }
   }
-  if (state.view === 'results') renderResults();
-  renderBus();
+  redrawAfterJob();
 }
 
 function renderResults() {
@@ -2565,6 +2604,7 @@ function renderResults() {
         'Every scenario is simulated over every interval. Identical inputs always produce identical results, ' +
         'and the hashes below are how you can check that.' }),
     ]),
+    busyNote(),
   ]));
 
   if (!state.run) return;
@@ -3487,6 +3527,8 @@ function renderSensitivity() {
   values1.addEventListener('input', countCells);
   values2.addEventListener('input', countCells);
   box.appendChild(el('div', { class: 'row' }, [go, count]));
+  const waiting = busyNote();
+  if (waiting) box.appendChild(waiting);
   const notice = staleNotice(state.study
     ? 'You have unsaved changes. This study is from the last saved assumptions. Running it again saves first.'
     : 'You have unsaved changes. Running a study saves them first.');
@@ -3502,7 +3544,7 @@ function renderSensitivity() {
 }
 
 async function runStudy() {
-  if (state.busy) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   const settings = sensitivitySettings();
   if (!settings) return;
   const first = parseValues(settings.v1);
@@ -3527,6 +3569,7 @@ async function runStudy() {
   }
 
   if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
     const mark = markBusy('study', stamp);
     renderSensitivity();
@@ -3540,8 +3583,7 @@ async function runStudy() {
     state.studyRequest = body;
     state.bundle = null;
   }
-  if (state.view === 'sensitivity') renderSensitivity();
-  renderBus();
+  redrawAfterJob();
 }
 
 function describeCell(study, cell) {
@@ -3744,7 +3786,7 @@ function heatTable(study, metric) {
 // ---------------------------------------------------------------------------
 
 async function runExport() {
-  if (state.busy) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   if (state.study && isUnsaved()) {
     // Saving ends the study, because it was run on what is about to be replaced. That is
     // the user's decision to make, not something to find out from a missing file.
@@ -3761,6 +3803,7 @@ async function runExport() {
     if (choice !== 'save') return;
   }
   if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
   const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
     const mark = markBusy('export', stamp);
     renderExport();
@@ -3778,8 +3821,7 @@ async function runExport() {
     state.bundle = reply.body;
     toast(`Wrote ${reply.body.artifacts.length} files.`, null, true);
   }
-  if (state.view === 'export') renderExport();
-  renderBus();
+  redrawAfterJob();
 }
 
 function renderExport() {
@@ -3805,6 +3847,7 @@ function renderExport() {
     ]),
     el('div', { class: 'row' }, [
       go,
+      busyNote(),
       el('span', { class: 'tiny muted', text: state.study
         ? (isUnsaved()
           ? 'Saving discards the sensitivity study on screen, so this export would leave it out. You will be asked first.'

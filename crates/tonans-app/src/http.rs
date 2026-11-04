@@ -607,14 +607,17 @@ mod tests {
         let caught = std::panic::catch_unwind(|| on_its_own_thread(|| panic!("boom")));
         assert!(caught.is_err());
 
-        // The routes that use it.
+        // The routes that use it, each through the one claim on a heavy job.
         let server = include_str!("server.rs");
+        let heavy = &server[server.find("fn heavy(").unwrap()..];
+        assert!(heavy[..400].contains("begin_heavy_job"));
+        assert!(heavy[..400].contains("on_its_own_thread"));
         for route in ["import", "run", "sensitivity", "export"] {
             let at = server
                 .find(&format!("api::{route}(state, name, request)"))
                 .unwrap_or_else(|| panic!("{route}"));
             assert!(
-                server[at.saturating_sub(40)..at].contains("on_its_own_thread"),
+                server[at.saturating_sub(60)..at].contains("heavy(state"),
                 "{route}"
             );
         }
