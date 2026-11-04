@@ -2,9 +2,9 @@
 
 **Status: no binary release yet.**
 
-The numeric public-reference gate and final integrated automated gates are closed for
-the exact release-candidate artifact below. Evidence belongs to the exact artifact being considered for release;
-an earlier green run does not bless a later binary.
+The results below belong to the release-candidate archive built before Tonans became open
+source. Evidence belongs to the exact artifact being considered for release, so these gates
+must be rerun against the next package.
 
 Verified 2026-07-13:
 
@@ -40,17 +40,14 @@ source-flow metrics, assumption text, sensitivity results, export links, and pro
 reopening. Record the tested package digest when this passes.
 
 Passed 2026-11-03 against a Linux release build of this source, not the Windows package,
-using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through
-the page: all eight columns mapped in the import form, 8,760 intervals imported, a battery scenario added and saved, baseline and battery
-scenarios compared, a 12-cell sensitivity grid run, and a bundle exported whose seven
-files all pass `SHA256SUMS.txt`, with no script in `report.html`. After stopping the
-server from the UI and restarting, the reopened project reproduced model input hash
-`057ae97fc9ff` and project hash `18b39fd1f6f4` with identical results. This run found and
-fixed the scenario count staying stale after saving, and an independent review then found a
-second save defect, now fixed and rechecked in the browser: after one save, later edits were
-dropped by the next save. No package digest applies to this source build. Rerun the
-walkthrough against the staged Windows package and record its digest before publishing a
-binary.
+using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through the
+page: all eight columns mapped in the import form, 8,760 intervals imported, three scenarios
+added and saved, four scenarios compared, a 12-cell sensitivity grid run, and a bundle
+exported whose files all pass `SHA256SUMS.txt`, with no script in `report.html`. After
+stopping the server from the UI and restarting, the reopened project reproduced model input
+hash `e20536dfda6e` and project hash `5f98a2f9428a`. No package digest applies to this source
+build. Rerun the walkthrough against the staged Windows package and record its digest before
+publishing a binary.
 
 ### Final integrated gate rerun
 
@@ -135,7 +132,7 @@ The package build must:
   an external archive digest;
 - include the model, security, privacy, benchmark, licence, and support documents;
 - declare the unsigned status; and
-- include no payment integration, live licensing origin, or secret.
+- include no payment integration or secret.
 
 ### Independent package verification
 
@@ -169,7 +166,6 @@ A reviewer who did not implement the final slice must inspect at least:
 - `engine.rs`, `economics.rs`, source attribution, and `docs/MODEL.md` together;
 - CSV/time-grid/project-store/path boundaries;
 - HTTP head/body ordering, deadlines, queue bounds, guards, and response writing;
-- entitlement checks at use time;
 - package contents, PE imports, SBOM/notices/checksums, and sanitized smoke evidence;
 - public claims for parity and determinism.
 
