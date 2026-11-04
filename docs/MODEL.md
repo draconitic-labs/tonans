@@ -11,7 +11,7 @@ planning result can be reviewed rather than accepted as a black box.
 - **Not protection, conductor, interconnection, or compliance analysis.**
 - **Not real-time dispatch or control.** Tonans accepts and emits no equipment
   commands.
-- **Not an electrochemical lifetime model.** Degradation is a transparent linear
+- **Not an electrochemical lifetime model.** Degradation is a transparent compounding
   fade and throughput-cost approximation.
 - **Not an optimizer.** Named dispatch rules use no future load, generation, or
   price information. Tonans does not claim an optimum it did not compute.
@@ -188,6 +188,17 @@ savings do not escalate. Annual OPEX and throughput wear cost are held constant 
 nominal terms; replacement follows the explicit replacement assumption. If the user
 selects capacity-proportional benefit scaling, the documented fade factor is applied
 to modeled benefits, but Tonans does not rerun dispatch for every future year.
+
+Fade compounds. Each year's loss is taken from what the year before left:
+
+```text
+r = calendar_fade_pct_per_year + cycle_fade_pct_per_cycle x equivalent_full_cycles_per_year
+usable capacity in year n = initial_capacity_pct x (1 - r / 100) ^ (n - 1)
+```
+
+So in the bundled demo's peak-limit scenario, year 15 has 73.25% of nameplate, where a straight
+line at the same `r` would leave 69.21%. A replacement resets usable capacity to 100%, and the
+compounding starts again from there.
 
 ## Determinism and hashes
 

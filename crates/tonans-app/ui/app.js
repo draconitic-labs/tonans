@@ -2120,7 +2120,7 @@ function degradationSection(scenario, prefix) {
   return section('degradation', 'Degradation',
     `${g.calendar_fade_pct_per_year} %/year calendar, ${g.cycle_fade_pct_per_cycle} %/cycle`, [
       el('p', { class: 'tiny muted', text:
-        'A transparent approximation, not a lifetime model: a linear fade in two terms that knows nothing about ' +
+        'A transparent approximation, not a lifetime model: a yearly fade in two terms, each year taken from what is left, that knows nothing about ' +
         'depth of discharge, C-rate, or thermal history. Where a vendor gives a warranted capacity curve, use that instead.' }),
       el('div', { class: 'grid' }, [
         field('Calendar fade (% per year)', num('calendar_fade_pct_per_year')),

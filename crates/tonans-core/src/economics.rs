@@ -16,8 +16,9 @@
 //! raises a caution — because a demand charge does not scale with time, and three
 //! months of summer data annualized by four is not a year.
 //!
-//! **Fade.** Capacity is lost linearly, in two terms: a calendar term per year and
-//! a cycling term per equivalent full cycle. It is not an electrochemical model.
+//! **Fade.** Capacity is lost at a fixed percentage a year, compounding: usable capacity in
+//! year `n` is `initial x (1 - r)^(n - 1)`, where `r` adds a calendar term per year and a
+//! cycling term per equivalent full cycle. It is not an electrochemical model.
 //! It knows nothing about depth of discharge, C-rate, or thermal history. A
 //! vendor's warranted capacity curve beats it every time, and where one exists it
 //! should be used instead.
@@ -332,8 +333,9 @@ pub fn evaluate(
     }
 
     let degradation_method = format!(
-        "Linear fade approximation: {calendar:.2}% per year (calendar) + {cycle:.4}% per equivalent \
-         full cycle x {cycles:.1} cycles per year = {total:.2}% per year. Benefit in later years is \
+        "Compounding fade approximation: {calendar:.2}% per year (calendar) + {cycle:.4}% per \
+         equivalent full cycle x {cycles:.1} cycles per year = {total:.2}% per year, each year's \
+         loss taken from the capacity left after the year before. Benefit in later years is \
          {scaling}. This is a transparent approximation, not an electrochemical lifetime model.",
         calendar = degradation.calendar_fade_pct_per_year,
         cycle = degradation.cycle_fade_pct_per_cycle,
@@ -595,6 +597,38 @@ mod tests {
     /// A replacement fires in the first year capacity would start below the trigger.
     /// 10% fade: 100, 90, 81, 72.9, 65.61 — so with a trigger at 70%, year 5 is the
     /// first year that starts below it.
+    #[test]
+    fn fade_compounds_and_year_fifteen_is_the_stated_formula() {
+        let economics = EconomicsSpec {
+            capex_usd: 100_000.0,
+            replacement: None,
+            horizon_years: 15,
+            ..EconomicsSpec::default()
+        };
+        let degradation = DegradationSpec {
+            calendar_fade_pct_per_year: 2.0,
+            cycle_fade_pct_per_cycle: 0.0,
+            ..DegradationSpec::default()
+        };
+        let mut ledger = WarningLedger::new();
+        let result = evaluate(
+            &scenario(economics, degradation),
+            &energy(HOURS_PER_YEAR, 0.0),
+            &cost(90_000.0),
+            &cost(100_000.0),
+            &mut ledger,
+        )
+        .unwrap();
+        // 100 x 0.98^14. A straight line would read 72.
+        let expected = 100.0 * 0.98_f64.powi(14);
+        assert!((expected - 75.36).abs() < 0.01);
+        let year_15 = result.cash_flow[14].capacity_retention_pct;
+        assert!((year_15 - expected).abs() < 1e-9, "{year_15}");
+        // And every text that describes it says so.
+        assert!(result.degradation_method.contains("Compounding"));
+        assert!(!result.degradation_method.to_lowercase().contains("linear"));
+    }
+
     #[test]
     fn replacement_fires_when_capacity_crosses_the_trigger() {
         let mut ledger = WarningLedger::new();

@@ -44,7 +44,7 @@ pub const MODEL_EXCLUSIONS: &[&str] = &[
     "AC power flow, voltage, reactive power, and short-circuit duty are not modelled.",
     "Protection coordination, conductor sizing, and interconnection compliance are not modelled.",
     "Real-time dispatch, device control, and SCADA integration are out of scope by design.",
-    "Battery degradation is a transparent linear fade and throughput approximation, not an electrochemical lifetime model.",
+    "Battery degradation is a transparent compounding fade and throughput approximation, not an electrochemical lifetime model.",
     "Dispatch policies are fixed, named rules evaluated interval by interval. Tonans does not optimise and does not claim an optimal result.",
     "A single electrical bus is assumed. Losses inside the site distribution system are not modelled.",
 ];

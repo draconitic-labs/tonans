@@ -1533,7 +1533,7 @@ pub struct ReplacementSpec {
 /// How the battery is assumed to age.
 ///
 /// This is an *approximation*, stated as one, everywhere it appears. It is a
-/// linear fade in two terms — calendar and cycling — plus a throughput cost. It
+/// compounding fade in two terms — calendar and cycling — plus a throughput cost. It
 /// is not an electrochemical lifetime model, it does not know about depth of
 /// discharge, C-rate, or temperature history, and a vendor's warranty curve
 /// should override it whenever one exists.

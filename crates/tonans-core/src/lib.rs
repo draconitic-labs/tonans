@@ -26,7 +26,7 @@
 //! Not an AC power-flow solver. Not a protection or interconnection study. Not an
 //! optimiser — the dispatch policies are named rules with no view of the future,
 //! and Tonans never claims an optimum it did not compute. Not a battery lifetime
-//! model — the fade is a transparent linear approximation and says so on every
+//! model — the fade is a transparent compounding approximation and says so on every
 //! artifact it touches. See [`version::MODEL_EXCLUSIONS`].
 //!
 //! ## The shape of a session
