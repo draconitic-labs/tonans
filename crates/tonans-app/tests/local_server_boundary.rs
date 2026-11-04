@@ -41,6 +41,7 @@ const STATE_CHANGING: &[(&str, &str)] = &[
 const READING: &[&str] = &[
     "/",
     "/app.js",
+    "/logic.mjs",
     "/styles.css",
     "/palette.css",
     "/favicon.svg",

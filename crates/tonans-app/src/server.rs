@@ -253,6 +253,7 @@ impl Router {
         match (method, segments.as_slice()) {
             ("GET", []) => assets::index(),
             ("GET", ["app.js"]) => assets::script(),
+            ("GET", ["logic.mjs"]) => assets::logic(),
             ("GET", ["styles.css"]) => assets::stylesheet(),
             ("GET", ["palette.css"]) => assets::palette(),
             ("GET", ["favicon.svg"]) => assets::favicon(),

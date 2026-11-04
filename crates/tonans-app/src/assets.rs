@@ -10,6 +10,7 @@ use crate::http::Response;
 
 const INDEX: &str = include_str!("../ui/index.html");
 const SCRIPT: &str = include_str!("../ui/app.js");
+const LOGIC: &str = include_str!("../ui/logic.mjs");
 const STYLESHEET: &str = include_str!("../ui/styles.css");
 const FAVICON: &str = include_str!("../ui/favicon.svg");
 
@@ -47,6 +48,11 @@ pub fn index() -> Response {
 /// `GET /app.js`
 pub fn script() -> Response {
     Response::new(200, "text/javascript; charset=utf-8", SCRIPT)
+}
+
+/// `GET /logic.mjs`
+pub fn logic() -> Response {
+    Response::new(200, "text/javascript; charset=utf-8", LOGIC)
 }
 
 /// `GET /styles.css`
@@ -137,6 +143,7 @@ mod tests {
         for (name, source) in [
             ("index.html", INDEX),
             ("app.js", SCRIPT),
+            ("logic.mjs", LOGIC),
             ("styles.css", STYLESHEET),
         ] {
             for forbidden in [
@@ -160,19 +167,21 @@ mod tests {
         // A scenario name, a warning message, and a source filename all come from data
         // Tonans does not control. Every one of them reaches the page through
         // `textContent`. An `innerHTML` here would be an injection waiting to happen.
-        let code = code_only(SCRIPT);
-        for forbidden in [
-            "eval(",
-            "new Function(",
-            "innerHTML",
-            "outerHTML",
-            "document.write",
-            "insertAdjacentHTML",
-        ] {
-            assert!(
-                !code.contains(forbidden),
-                "app.js uses '{forbidden}'. Build DOM nodes and set textContent instead."
-            );
+        for (name, source) in [("app.js", SCRIPT), ("logic.mjs", LOGIC)] {
+            let code = code_only(source);
+            for forbidden in [
+                "eval(",
+                "new Function(",
+                "innerHTML",
+                "outerHTML",
+                "document.write",
+                "insertAdjacentHTML",
+            ] {
+                assert!(
+                    !code.contains(forbidden),
+                    "{name} uses '{forbidden}'. Build DOM nodes and set textContent instead."
+                );
+            }
         }
     }
 
