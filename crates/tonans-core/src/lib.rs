@@ -34,7 +34,6 @@
 //! ```
 //! use std::collections::BTreeMap;
 //! use tonans_core::csvimport::{ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
-//! use tonans_core::licensing::Entitlements;
 //! use tonans_core::schema::{GapPolicy, Project, SeriesKind, Site};
 //! use tonans_core::run;
 //!
@@ -67,7 +66,7 @@
 //! let csv = b"timestamp,load_kw\n2024-01-01T00:00:00-05:00,40\n2024-01-01T01:00:00-05:00,55\n";
 //! project.dataset = Some(tonans_core::csvimport::import(csv, &request, now)?.dataset);
 //!
-//! let result = run::run_project(&project, Entitlements::evaluation(), now)?;
+//! let result = run::run_project(&project, now)?;
 //! let baseline = result.baseline().expect("a new project always has a baseline");
 //! assert_eq!(baseline.energy.grid_import_kwh, 95.0); // 40 kWh + 55 kWh, no battery
 //! # Ok(())
@@ -83,7 +82,6 @@ pub mod economics;
 pub mod engine;
 pub mod error;
 pub mod export;
-pub mod licensing;
 pub mod limits;
 pub mod paths;
 pub mod provenance;
