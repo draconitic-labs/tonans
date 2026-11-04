@@ -526,7 +526,7 @@ async function newProject() {
       el('button', { type: 'button', text: 'Cancel', onclick: () => close(null) }),
       el('button', { type: 'button', text: 'Create project', class: 'primary', onclick: create }),
     ]));
-    name.addEventListener('keydown', (event) => { if (event.key === 'Enter') create(); });
+    for (const input of [name, timezone]) input.addEventListener('keydown', (event) => { if (event.key === 'Enter') create(); });
     setTimeout(() => name.focus(), 0);
   });
   if (!created) return;
