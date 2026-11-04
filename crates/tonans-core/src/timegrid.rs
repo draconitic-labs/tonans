@@ -239,7 +239,9 @@ impl IntervalGrid {
 }
 
 fn is_local_boundary(local: &DateTime<Tz>, interval_minutes: u32) -> bool {
-    local.second() == 0 && local.nanosecond() == 0 && local.minute().is_multiple_of(interval_minutes)
+    local.second() == 0
+        && local.nanosecond() == 0
+        && local.minute().is_multiple_of(interval_minutes)
 }
 
 /// Convert a naive local timestamp to UTC, refusing to guess.
