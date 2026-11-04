@@ -119,9 +119,9 @@ and become visible through an atomic replacement.
 ## Toolchain
 
 The release package targets `x86_64-pc-windows-gnullvm` with llvm-mingw so it does not
-depend on a Visual Studio installation. That package holds the `tonans` command only; the
-window's Windows dependencies have been built with the default MSVC target in CI and not
-with this toolchain. `chrono` is built without its clock feature,
+depend on a Visual Studio installation. That package holds the `tonans` command only. CI builds
+the window for Windows with the default MSVC target, and it has not been tried with this
+toolchain. `chrono` is built without its clock feature,
 and `unsafe_code` is forbidden workspace-wide.
 
 `getrandom` remains pinned to 0.2 because that version reaches the Windows CSPRNG

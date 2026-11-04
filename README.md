@@ -87,9 +87,9 @@ On Linux, with the pinned toolchain and the packages above:
 cargo test --workspace --all-targets --locked
 ```
 
-On Windows x64 the whole workspace, including the window, builds with the default MSVC
-Rust target, which is what CI uses. The release package uses the llvm-mingw toolchain
-and builds the `tonans` command only:
+CI builds the whole workspace, including the window, for Windows with the default MSVC
+Rust target. The window has not been run on Windows. The release package uses the
+llvm-mingw toolchain and builds the `tonans` command only:
 
 ```powershell
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"

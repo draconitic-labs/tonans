@@ -470,7 +470,7 @@ function renderProjectSummary(project) {
 
 const VIEWS = ['data', 'scenarios', 'results', 'sensitivity', 'export'];
 
-function show(view) {
+function show(view, { keepScroll = false } = {}) {
   state.view = view;
   for (const name of VIEWS) {
     document.getElementById(`view-${name}`).classList.toggle('hidden', name !== view);
@@ -479,7 +479,7 @@ function show(view) {
                    sensitivity: renderSensitivity, export: renderExport }[view];
   if (render) render();
   renderBus();
-  document.getElementById('views').scrollTop = 0;
+  if (!keepScroll) document.getElementById('views').scrollTop = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +651,7 @@ function undo() {
   state.redo.push({ label: entry.label, json: editableJson() });
   restoreEditable(entry.json);
   state.editKey = null;
-  show(state.view);
+  show(state.view, { keepScroll: true });
   syncUnsaved();
   toast(`Undid: ${entry.label}.`, null, true);
 }
@@ -662,7 +662,7 @@ function redo() {
   state.undo.push({ label: entry.label, json: editableJson() });
   restoreEditable(entry.json);
   state.editKey = null;
-  show(state.view);
+  show(state.view, { keepScroll: true });
   syncUnsaved();
   toast(`Redid: ${entry.label}.`, null, true);
 }
@@ -706,7 +706,7 @@ async function saveProject() {
   renderProjectSummary(saved);
   // The inputs on screen are bound to the object just replaced. Redraw them, or the
   // next edit changes that old object and the next save silently drops it.
-  show(state.view);
+  show(state.view, { keepScroll: true });
   toast('Saved. Run again to refresh results.', null, true);
   await refreshProjects();
   return saved;
@@ -2226,7 +2226,7 @@ function addScenario() {
       if (fields.length) pane.appendChild(el('div', { class: 'grid' }, fields));
       pane.appendChild(el('p', { class: 'tiny muted', text:
         'Tariff, economics, degradation, and outages are copied from the baseline, so the comparison stays like ' +
-        'for like. Battery defaults are 95 % efficiency each way, a 10 to 100 % window, 1.5 % self-discharge a ' +
+        'for like. That includes any replacement cost, which does not move with the size here. Battery defaults are 95 % efficiency each way, a 10 to 100 % window, 1.5 % self-discharge a ' +
         'month, and a 50 % starting charge. All of it is a starting point, not a recommendation: review it on the scenario.' }));
       pane.appendChild(failure);
     };

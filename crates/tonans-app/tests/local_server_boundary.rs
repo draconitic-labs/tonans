@@ -108,9 +108,26 @@ impl Running {
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }
-        request.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+        request.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = Vec::new();
+        if !body.is_empty() {
+            // A refusal is answered from the head alone, and the server then closes with
+            // the body unread. Sending the body anyway would race that close, and on
+            // Windows the reset can discard the answer. So the body goes only if no answer
+            // has come after a moment, which is also what a slow client would see.
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let mut first = [0u8; 4096];
+            match stream.read(&mut first) {
+                Ok(count) => response.extend_from_slice(&first[..count]),
+                Err(_) => stream.write_all(body.as_bytes()).unwrap(),
+            }
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .unwrap();
+        }
         let _ = stream.read_to_end(&mut response);
         let text = String::from_utf8_lossy(&response).into_owned();
         let status = text

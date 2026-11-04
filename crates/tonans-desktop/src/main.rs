@@ -646,13 +646,16 @@ mod tests {
         // The include! path itself is half of this check: the file must have this name.
         assert_eq!(identifier, "com.flintglade.tonans");
         let entry = include_str!("../../../packaging/linux/com.flintglade.tonans.desktop");
-        assert!(entry.contains(&format!("\nIcon={identifier}\n")), "{entry}");
+        // Line by line, because a Windows checkout has CRLF endings and `include_str!`
+        // keeps them.
+        let has_line = |text: &str, wanted: String| text.lines().any(|line| line == wanted);
+        assert!(has_line(entry, format!("Icon={identifier}")), "{entry}");
         assert!(
-            entry.contains(&format!("\nStartupWMClass={identifier}\n")),
+            has_line(entry, format!("StartupWMClass={identifier}")),
             "{entry}"
         );
         let installer = include_str!("../../../scripts/install-desktop.sh");
-        assert!(installer.contains(&format!("APP_ID=\"{identifier}\"\n")));
+        assert!(has_line(installer, format!("APP_ID=\"{identifier}\"")));
     }
 
     #[cfg(unix)]

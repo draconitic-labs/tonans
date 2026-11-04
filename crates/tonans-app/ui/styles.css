@@ -394,9 +394,11 @@ tr.suggested-check > td:first-child { box-shadow: inset 3px 0 0 var(--warning); 
 
 /* ---------------------------------------------------------------- dialogs */
 
+/* Anchored at the top, so a dialog whose height changes does not move what it just clicked. */
 .dialog {
+  margin: 8vh auto auto;
   width: min(860px, calc(100vw - 48px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(92vh - 24px);
   padding: 18px 20px;
   border: 1px solid var(--axis); border-radius: var(--radius);
   background: var(--surface); color: var(--ink);
