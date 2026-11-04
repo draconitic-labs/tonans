@@ -79,6 +79,12 @@ A panicking handler does not take the application down. Each request runs inside
 to its next connection. The release profile therefore unwinds, and a test holds it to that.
 A lock poisoned by such a panic is recovered, because what it guards stays valid.
 
+Each request is answered on a thread that ends with it. A run of the largest allowed project
+allocates about 2.4 GB, and glibc keeps what a thread frees for that thread, then hands it to
+the next thread that starts. So memory is reused from one run to the next, rather than each of
+the eight workers keeping its own copy. It stays at about 2 GB after such a run, and is not
+returned to the system until Tonans quits.
+
 Two windows on one workspace are two processes, so a project's revision is the SHA-256 of
 its file. Every read returns it in `x-tonans-revision`. A save must send it, and gets 428
 without it and 409 with an old one, so a stale window cannot overwrite data another window

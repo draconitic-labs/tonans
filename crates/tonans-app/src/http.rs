@@ -253,7 +253,7 @@ fn answer<H: Handler>(reader: &mut BufReader<DeadlineStream>, handler: &H) -> Re
                 match read_body(reader, &request.headers, limit) {
                     Ok(body) => {
                         request.body = body;
-                        handler.handle(&request)
+                        handle_on_its_own_thread(handler, &request)
                     }
                     Err(status) => bad_request(status),
                 }
@@ -261,6 +261,22 @@ fn answer<H: Handler>(reader: &mut BufReader<DeadlineStream>, handler: &H) -> Re
         },
         Err(status) => bad_request(status),
     }
+}
+
+/// Answer a request on a thread that ends with it.
+///
+/// A run of the largest project allowed allocates about 2.4 GB. On Linux the allocator keeps
+/// what a thread frees for that thread, and hands a finished thread's memory to the next
+/// thread that starts. Run on the pool's workers, each of the eight kept its own 2 GB, so the
+/// process grew by that much a run until the machine ran out. On threads like this one, each
+/// run reuses the memory of the one before.
+fn handle_on_its_own_thread<H: Handler>(handler: &H, request: &Request) -> Response {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| handler.handle(request))
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 fn bad_request(status: u16) -> Response {
@@ -571,6 +587,47 @@ mod tests {
                 "{response}"
             );
         }
+    }
+
+    #[test]
+    fn each_request_is_answered_on_a_thread_that_ends_with_it() {
+        // If a worker ran the handler itself, each worker would keep the memory of the
+        // largest request it ever served. Measured on 105,120 intervals and four scenarios:
+        // 1.9 GB, 3.8 GB, then killed at an 8 GB ceiling, against a flat 2.0 GB this way.
+        struct Recording(Mutex<Vec<std::thread::ThreadId>>);
+        impl Handler for Recording {
+            fn handle(&self, _request: &Request) -> Response {
+                self.0.lock().unwrap().push(std::thread::current().id());
+                Response::json(200, "{}")
+            }
+            fn body_limit(&self, _method: &str, _path: &str) -> usize {
+                0
+            }
+        }
+        let handler = Recording(Mutex::new(Vec::new()));
+        let (mut first, first_server) = socket_pair();
+        let (mut second, second_server) = socket_pair();
+        for client in [&mut first, &mut second] {
+            client
+                .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
+        }
+        // One worker serves both.
+        let worker = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    connection(first_server, &handler);
+                    connection(second_server, &handler);
+                    std::thread::current().id()
+                })
+                .join()
+                .unwrap()
+        });
+        let threads = handler.0.lock().unwrap();
+        assert_eq!(threads.len(), 2);
+        assert_ne!(threads[0], worker);
+        assert_ne!(threads[1], worker);
+        assert_ne!(threads[0], threads[1]);
     }
 
     #[test]
