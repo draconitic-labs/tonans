@@ -5,7 +5,7 @@ members = ["crates/tonans-core", "crates/tonans-app", "crates/tonans-desktop"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.96"
 authors = ["Flintglade <support@flintglade.com>"]
 license = "Apache-2.0"
 publish = false
