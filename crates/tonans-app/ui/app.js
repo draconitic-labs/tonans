@@ -1065,7 +1065,7 @@ function sourceChooser(project) {
     }
     const into = state.project.name;
     const receipt = await guard(async () => {
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      const bytes = await readFile(file);
       return api('/api/upload', { method: 'POST', raw: bytes, filename: file.name });
     });
     if (receipt) receiveUpload(receipt, into);
@@ -1088,6 +1088,17 @@ function sourceChooser(project) {
     'the same mapping and import as your own file, and the project records that it is synthetic. The template ' +
     'has every column Tonans can read and three rows showing the format of each.' }));
   return box;
+}
+
+/** The page's own error for a file that has gone is a number and a riddle. */
+async function readFile(file) {
+  try {
+    return new Uint8Array(await file.arrayBuffer());
+  } catch {
+    const error = new Error(`Tonans could not read "${file.name}". It may have been moved or deleted, or you may not have permission to read it.`);
+    error.code = 'ui.file_unreadable';
+    throw error;
+  }
 }
 
 function receiveUpload(receipt, into) {
@@ -1298,7 +1309,10 @@ function mappingCard(receipt) {
     el('span', { class: 'tiny muted', text:
       'Fills the choices below from your column names, with the reason for each. Nothing is read until you confirm.' }),
   ]));
-  for (const note of state.mappingNotes) card.appendChild(el('p', { class: 'tiny muted', text: note }));
+  // A column left unsuggested is a question for the user, so it is not set in small print.
+  if (state.mappingNotes.length) {
+    card.appendChild(el('div', { class: 'banner' }, state.mappingNotes.map((note) => el('p', { text: note }))));
+  }
 
   const table = el('table', { class: 'map-table' });
   table.appendChild(el('thead', {}, el('tr', {}, [
@@ -1600,7 +1614,7 @@ function feederNote(scenario, project) {
   const parts = [];
   if (scenario.id === project.baseline_scenario_id) parts.push('Baseline');
   parts.push(scenario.battery
-    ? `${fmt.n(scenario.battery.nameplate_energy_kwh, 0)} kWh, ${fmt.n(scenario.battery.max_discharge_kw, 0)} kW`
+    ? `${formatAxis(scenario.battery.nameplate_energy_kwh)} kWh, ${formatAxis(scenario.battery.max_discharge_kw)} kW`
     : 'No battery');
   parts.push(POLICY_NAMES[scenario.dispatch.policy]);
   return parts.join(', ');
@@ -1803,7 +1817,7 @@ function batterySection(scenario, prefix) {
     body.push(deratingEditor(scenario, b, prefix));
   }
   const summary = b
-    ? `${fmt.n(b.nameplate_energy_kwh, 0)} kWh, ${fmt.n(b.max_discharge_kw, 0)} kW, reserve ${b.reserve_soc_pct} %`
+    ? `${formatAxis(b.nameplate_energy_kwh)} kWh, ${formatAxis(b.max_discharge_kw)} kW, reserve ${b.reserve_soc_pct} %`
     : 'None';
   return section('battery', 'Battery', summary, body);
 }
@@ -3625,6 +3639,8 @@ function addCellAsScenario(study, cell) {
   project.scenarios.push(scenario);
   state.selected = scenario.id;
   syncUnsaved();
+  // This screen now has unsaved changes to say so about.
+  if (state.view === 'sensitivity') renderSensitivity();
   toast(`Added "${scenario.name}" to the scenarios. Save and run to compare it.`, null, true, {
     label: 'Open it', run: () => show('scenarios'),
   });
