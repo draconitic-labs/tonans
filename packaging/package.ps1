@@ -48,8 +48,7 @@ $Toolchain = 'stable-x86_64-pc-windows-gnullvm'
 $Payload = @(
     'Tonans.exe'
     'README.md'
-    'LICENSE.md'
-    'TERMS.md'
+    'LICENSE'
     'NOTICES.md'
     'PRIVACY.md'
     'SECURITY.md'
@@ -140,8 +139,7 @@ New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 
 Copy-Item $exePath (Join-Path $StageDir 'Tonans.exe')
 Copy-Item (Join-Path $RepoRoot 'packaging\payload\README.md') (Join-Path $StageDir 'README.md')
-Copy-Item (Join-Path $RepoRoot 'LICENSE.md') $StageDir
-Copy-Item (Join-Path $RepoRoot 'TERMS.md') $StageDir
+Copy-Item (Join-Path $RepoRoot 'LICENSE') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\PRIVACY.md') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\SECURITY.md') $StageDir
 Copy-Item (Join-Path $RepoRoot 'docs\MODEL.md') $StageDir
@@ -251,7 +249,7 @@ $bom = [ordered]@{
             version   = $Version
             purl      = "pkg:cargo/tonans@$Version"
             publisher = 'Flintglade'
-            licenses  = @(@{ expression = 'LicenseRef-Flintglade-Tonans-Commercial' })
+            licenses  = @(@{ expression = 'Apache-2.0' })
             description = 'Local-first deterministic microgrid scenario workbench.'
         }
         # No timestamp: it would make two packagings of identical inputs differ,
