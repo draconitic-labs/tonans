@@ -130,8 +130,17 @@ cargo +stable-x86_64-pc-windows-gnullvm test `
 ```
 
 The package holds the `tonans` command, so these name its crates. The desktop shell is
-gated separately in CI, which runs the same three commands with `--workspace` on Ubuntu and
-on the default Windows target.
+gated separately in CI. Formatting and Clippy run with `--workspace` on Ubuntu and on the
+default Windows target. Tests run with `--workspace` on Ubuntu. On Windows they run with
+`--exclude tonans-desktop`, because the shell's test binary has no application manifest and
+cannot load there; its tests are platform-neutral, and the release build still covers the
+binary.
+
+The page's own rules are tested under Node, with nothing else installed:
+
+```sh
+node --test crates/tonans-app/ui-tests/logic.test.mjs
+```
 
 These gates have passed during the hardening cycle and must pass again after
 integration. The workspace forbids unsafe code and denies `todo!`, `unimplemented!`,
@@ -157,11 +166,22 @@ durable evidence; the count will legitimately grow as regressions are added.
 ### Dependency audit
 
 ```powershell
-cargo audit
+cargo audit --deny warnings
 ```
 
 Audit the locked tree. Any advisory is dispositioned explicitly; compatibility pins
-are not blanket exceptions.
+are not blanket exceptions. CI uses the same command, so a new warning fails the job.
+`.cargo/audit.toml` holds the list below, and nothing else may be added to it without a row
+here. Each of these comes from a stack the Tauri version pins, so check them again whenever
+Tauri moves.
+
+| Advisory | Crate | What it is | Why it is accepted for now |
+|---|---|---|---|
+| RUSTSEC-2024-0429 | glib 0.18.5 | Unsound `VariantStrIter` | Fixed in glib 0.20, but gtk 0.18 under Tauri holds it at 0.18. Tonans calls only `glib::set_prgname`, and no other crate in the locked tree names `VariantStrIter` or `array_iter_str` (searched 2026-11-04). |
+| RUSTSEC-2024-0370 | proc-macro-error 1.0.4 | Unmaintained | Used only at compile time through glib-macros. Not in the binary. |
+| RUSTSEC-2026-0370 | zvariant 5.15.1 | Unmaintained, merged into zbus 6 | No patched release. Linux only, through zbus 5 under tauri-plugin-opener, for the one call asking the local file manager to show a folder. |
+| RUSTSEC-2026-0371 | zbus_names 4.3.5 | Unmaintained, merged into zbus 6 | As above. |
+| RUSTSEC-2026-0372 | zvariant_derive 5.15.1 | Unmaintained, merged into zbus 6 | As above, at compile time. |
 
 ### Production package
 
