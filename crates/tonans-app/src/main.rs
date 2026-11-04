@@ -5,12 +5,13 @@
 //!
 //! * `tonans run --project <name> --out <dir>` runs a project headlessly and writes
 //!   the full export bundle. This is what a user would put in a script.
-//! * `tonans` starts the same loopback server the window uses and prints its one-launch
-//!   link. It never opens a browser. The packaged-binary smoke test drives the HTTP
-//!   boundary through it.
+//! * `tonans` starts the same loopback server the window uses. It never opens a browser,
+//!   and it shows its one-launch link only to a terminal. The packaged-binary smoke test
+//!   drives the HTTP boundary through it, asking for the link with `--print-link`.
 //!
 //! Nothing here talks to the network, phones home, or writes outside the workspace.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -26,7 +27,7 @@ use tonans_core::version::{
 const HELP: &str = "\
 Tonans — microgrid scenario workbench, without a window
 
-  tonans [OPTIONS]                       Start the loopback server and print its link
+  tonans [OPTIONS]                       Start the loopback server
   tonans run --project <NAME> [OPTIONS]  Run a project and write an export bundle
   tonans --version
   tonans --help
@@ -36,6 +37,9 @@ Options:
                       Default: %LOCALAPPDATA%\\Flintglade\\Tonans
   --port <PORT>       Loopback port. Default: 0, meaning the operating system
                       chooses one, which keeps it from being a fixed target.
+  --print-link        Print the link with its one-launch token even when output is
+                      being captured. Without this it goes only to a terminal. Whatever
+                      captures it can drive the application until the server stops.
   --no-browser        Accepted for older scripts. This command never opens a browser.
   --project <NAME>    (run) The project to run.
   --out <DIR>         (run) Where to write the bundle. Default: the workspace's
@@ -75,7 +79,7 @@ fn dispatch() -> Result<()> {
     let workspace = Workspace::open(args.workspace()?)?;
 
     match args.command {
-        Command::Serve => serve(workspace, args.port),
+        Command::Serve => serve(workspace, args.port, args.print_link),
         Command::Run => headless(workspace, args.project, args.out),
     }
 }
@@ -84,7 +88,16 @@ fn dispatch() -> Result<()> {
 // Launch
 // ---------------------------------------------------------------------------
 
-fn serve(workspace: Workspace, port: u16) -> Result<()> {
+/// Whether to print the link that carries the launch token.
+///
+/// The token grants control of the application, so it should not land in a log, a
+/// service journal, or a CI transcript just because this command's output went there.
+/// A terminal is a person reading it; anywhere else has to ask.
+const fn show_link(stdout_is_terminal: bool, asked: bool) -> bool {
+    stdout_is_terminal || asked
+}
+
+fn serve(workspace: Workspace, port: u16, print_link: bool) -> Result<()> {
     // The demonstration project is installed on first launch by importing the embedded
     // sample CSV through the real importer. It is not a fixture smuggled in through a
     // side door: if the importer would reject it, the demo does not exist.
@@ -95,8 +108,15 @@ fn serve(workspace: Workspace, port: u16) -> Result<()> {
     println!("{PRODUCT_NAME} {APP_VERSION} (model {MODEL_VERSION})");
     println!("  workspace: {}", server.state.workspace.root().display());
     println!();
-    println!("  This link carries the one-launch token; without it the API refuses.");
-    println!("  {}", server.url);
+    if show_link(std::io::stdout().is_terminal(), print_link) {
+        println!("  This link carries the one-launch token; without it the API refuses.");
+        println!("  {}", server.url);
+    } else {
+        println!("  Listening on http://{}/", server.address);
+        println!("  The link with its one-launch token goes only to a terminal, and this");
+        println!("  output is being captured. Run this in a terminal to see it, or use the");
+        println!("  desktop app, tonans-desktop.");
+    }
     println!();
     println!("  Bound to loopback only. Nothing is sent anywhere. Press Ctrl+C to stop.");
 
@@ -187,6 +207,7 @@ struct Args {
     command: Command,
     workspace: Option<PathBuf>,
     port: u16,
+    print_link: bool,
     project: Option<String>,
     out: Option<PathBuf>,
     help: bool,
@@ -204,6 +225,7 @@ impl Args {
             command: Command::Serve,
             workspace: None,
             port: 0,
+            print_link: false,
             project: None,
             out: None,
             help: false,
@@ -232,6 +254,7 @@ impl Args {
                 // Older scripts pass this. The command never opens a browser now, so
                 // there is nothing left for it to suppress.
                 "--no-browser" => {}
+                "--print-link" => parsed.print_link = true,
                 "--workspace" => parsed.workspace = Some(PathBuf::from(value()?)),
                 "--out" => parsed.out = Some(PathBuf::from(value()?)),
                 "--project" => parsed.project = Some(value()?),
@@ -330,6 +353,19 @@ mod tests {
         assert!(HELP.contains("planning estimates"));
         assert!(HELP.contains("127.0.0.1"));
         assert!(HELP.contains("support@flintglade.com"));
+    }
+
+    #[test]
+    fn the_link_goes_only_to_a_terminal_unless_someone_asks() {
+        assert!(show_link(true, false));
+        assert!(
+            !show_link(false, false),
+            "captured output must not get the token"
+        );
+        assert!(show_link(false, true));
+        assert!(show_link(true, true));
+        assert!(!parse(&[]).unwrap().print_link, "off by default");
+        assert!(parse(&["--print-link"]).unwrap().print_link);
     }
 
     #[test]

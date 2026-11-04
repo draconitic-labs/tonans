@@ -8,10 +8,10 @@
     "the artifact looks right" and "the artifact works".
 
     Everything happens in a temporary directory. The real workspace under
-    %LOCALAPPDATA%\Flintglade\Tonans is never touched, no browser is opened
-    (--no-browser), no shortcut is created, and the process is stopped through the
-    application's own shutdown route rather than being killed -- so a failure to
-    shut down cleanly is itself a finding.
+    %LOCALAPPDATA%\Flintglade\Tonans is never touched, no browser is opened, no
+    shortcut is created, and the process is stopped through the application's own
+    shutdown route rather than being killed -- so a failure to shut down cleanly is
+    itself a finding.
 
     What it proves:
 
@@ -122,10 +122,12 @@ try {
     $stdout = Join-Path $work 'stdout.txt'
     $stderr = Join-Path $work 'stderr.txt'
 
-    # --no-browser: this must not open a window on the operator's desktop.
+    # --print-link: output is redirected to a file, so without this the link with its
+    #               token would not be printed. The token dies with this process, and
+    #               the file sits in this run's temporary directory.
     # --port 0:     the kernel picks, which is what a real launch does.
     $process = Start-Process -FilePath $exe `
-        -ArgumentList @('--no-browser', '--port', '0', '--workspace', $workspaceDir) `
+        -ArgumentList @('--print-link', '--port', '0', '--workspace', $workspaceDir) `
         -WorkingDirectory $appDir `
         -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
