@@ -33,7 +33,7 @@ use tonans_core::version::{
 
 use crate::clock;
 use crate::demo;
-use crate::http::{Request, Response};
+use crate::http::{percent_decode, Request, Response};
 use crate::server::problem;
 use crate::state::{AppState, DEMO_PROJECT_NAME};
 use crate::token;
@@ -53,6 +53,34 @@ fn respond<T: Serialize>(result: Result<T>) -> Response {
             ),
         },
         Err(error) => problem(error.http_status(), error.code(), &error.to_string()),
+    }
+}
+
+/// The header a project's revision travels in, both ways.
+pub const REVISION_HEADER: &str = "x-tonans-revision";
+
+/// [`respond`], telling the client which revision of the project the answer is about.
+fn respond_at_revision<T: Serialize>(result: Result<(T, String)>) -> Response {
+    match result {
+        Ok((value, revision)) => respond(Ok(value)).with_header(REVISION_HEADER, &revision),
+        Err(error) => respond::<T>(Err(error)),
+    }
+}
+
+/// Load a project, refusing if the client said which revision it means and that is no
+/// longer what is on disk. Otherwise a result could be read next to assumptions it was
+/// not produced from. The header is optional here because reading changes nothing.
+fn load_for_request(state: &AppState, name: &str, request: &Request) -> Result<(Project, String)> {
+    let (project, revision) = state.workspace.load_project_at_revision(name)?;
+    match request.header(REVISION_HEADER) {
+        Some(expected) if expected != revision => Err(Error::Conflict {
+            code: "conflict.project_changed",
+            message: format!(
+                "'{name}' was changed somewhere else after this window read it, probably in \
+                 another Tonans window. Reopen it to see the latest."
+            ),
+        }),
+        _ => Ok((project, revision)),
     }
 }
 
@@ -144,6 +172,9 @@ pub struct CreateProject {
 pub fn create_project(state: &AppState, request: &Request) -> Response {
     respond((|| -> Result<Project> {
         let body: CreateProject = parse_body(request)?;
+        // A refused name must change nothing on disk, not even the lock file.
+        state.workspace.project_path(&body.name)?;
+        let _lock = state.workspace.lock_for_write()?;
         if body.name == DEMO_PROJECT_NAME {
             return Err(Error::validation(
                 "validation.reserved_project_name",
@@ -178,13 +209,23 @@ pub fn create_project(state: &AppState, request: &Request) -> Response {
 
 /// `GET /api/projects/{name}`
 pub fn open_project(state: &AppState, name: &str) -> Response {
-    respond(state.workspace.load_project(name))
+    respond_at_revision(state.workspace.load_project_at_revision(name))
 }
 
 /// `PUT /api/projects/{name}`
+///
+/// The body replaces the whole project, dataset included, so a save must say which
+/// revision it was made from. Without that, a window that read the project before
+/// another window imported data would put the empty project back.
 pub fn save_project(state: &AppState, name: &str, request: &Request) -> Response {
-    respond((|| -> Result<Project> {
-        state.workspace.load_project(name)?;
+    let Some(expected) = request.header(REVISION_HEADER) else {
+        return problem(
+            428,
+            "conflict.revision_required",
+            "A save must say which revision of the project it was made from.",
+        );
+    };
+    respond_at_revision((|| -> Result<(Project, String)> {
         let mut project: Project = parse_body(request)?;
         if project.name != name {
             return Err(Error::validation(
@@ -198,8 +239,10 @@ pub fn save_project(state: &AppState, name: &str, request: &Request) -> Response
         project.app_version = APP_VERSION.to_string();
         project.model_version = MODEL_VERSION.to_string();
         project.validate()?;
-        state.workspace.save_project(&project)?;
-        Ok(project)
+        let revision = state
+            .workspace
+            .save_project_at_revision(&project, expected)?;
+        Ok((project, revision))
     })())
 }
 
@@ -225,12 +268,9 @@ pub struct UploadReceipt {
 /// columns, and only then does anything get interpreted.
 pub fn upload(state: &AppState, request: &Request) -> Response {
     respond((|| -> Result<UploadReceipt> {
-        let supplied = request.header("x-tonans-filename").unwrap_or("upload.csv");
-        // The header is attacker-reachable, so the name is validated here, before the
-        // body is looked at. The UI sends the File API's `file.name`, which is a bare
-        // name; a name carrying a path is refused rather than trimmed down to
-        // something we invented. See `tonans_core::paths::source_file_name`.
-        let filename = source_file_name(supplied)?;
+        // Percent-encoded by the page, because a browser refuses a header value above
+        // U+00FF and what it does below that differs between platforms.
+        let filename = decode_file_name(request.header("x-tonans-filename"))?;
 
         let preview = csvimport::preview(&request.body)?;
         let upload_id = state.stage_upload(filename.clone(), request.body.clone())?;
@@ -240,6 +280,32 @@ pub fn upload(state: &AppState, request: &Request) -> Response {
             filename,
             preview,
         })
+    })())
+}
+
+/// The file name an upload arrived under, decoded and validated.
+///
+/// The header is attacker-reachable, so the name is validated here, before the body is
+/// looked at. The UI sends the File API's `file.name`, which is a bare name; a name
+/// carrying a path, encoded or not, is refused rather than trimmed down to something we
+/// invented. See `tonans_core::paths::source_file_name`.
+fn decode_file_name(header: Option<&str>) -> Result<String> {
+    let decoded = percent_decode(header.unwrap_or("upload.csv")).map_err(|_| {
+        Error::validation(
+            "validation.bad_file_name",
+            "upload.filename",
+            "the file name was not encoded in a way Tonans can read",
+        )
+    })?;
+    source_file_name(&decoded)
+}
+
+/// `POST /api/upload/cancel` — forget a staged upload now rather than at the next one.
+pub fn cancel_upload(state: &AppState, request: &Request) -> Response {
+    respond((|| -> Result<serde_json::Value> {
+        let body: SuggestBody = parse_body(request)?;
+        state.discard_upload(&body.upload_id);
+        Ok(serde_json::json!({ "discarded": true }))
     })())
 }
 
@@ -271,7 +337,7 @@ pub fn csv_template() -> Response {
     .with_header("content-disposition", "attachment")
 }
 
-/// Body of `POST /api/upload/suggest`.
+/// Body of `POST /api/upload/suggest` and `POST /api/upload/cancel`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuggestBody {
@@ -311,9 +377,8 @@ pub struct ImportBody {
 
 /// `POST /api/projects/{name}/import`
 pub fn import(state: &AppState, name: &str, request: &Request) -> Response {
-    respond((|| -> Result<serde_json::Value> {
+    respond_at_revision((|| -> Result<(serde_json::Value, String)> {
         let body: ImportBody = parse_body(request)?;
-        let mut project = state.workspace.load_project(name)?;
         let now = clock::now_utc();
 
         // Read without consuming: a refused import leaves the file staged, so the user
@@ -335,22 +400,29 @@ pub fn import(state: &AppState, name: &str, request: &Request) -> Response {
             ));
         }
 
+        // Applied to the project as it is now, under the lock, so an import keeps whatever
+        // another window saved while the file was being read.
+        let _lock = state.workspace.lock_for_write()?;
+        let mut project = state.workspace.load_project(name)?;
         project.dataset = Some(report.dataset.clone());
         project.site.timezone = import_request.timezone.clone();
         project.modified_utc = now;
         project.validate()?;
-        state.workspace.save_project(&project)?;
+        let revision = state.workspace.write_project(&project)?;
         state.discard_upload(&body.upload_id);
 
-        Ok(serde_json::json!({
-            "project": project,
-            "import": {
-                "row_count": report.row_count,
-                "interval_count": report.interval_count,
-                "synthesized_interval_count": report.synthesized_interval_count,
-                "warnings": report.warnings,
-            }
-        }))
+        Ok((
+            serde_json::json!({
+                "project": project,
+                "import": {
+                    "row_count": report.row_count,
+                    "interval_count": report.interval_count,
+                    "synthesized_interval_count": report.synthesized_interval_count,
+                    "warnings": report.warnings,
+                }
+            }),
+            revision,
+        ))
     })())
 }
 
@@ -422,16 +494,14 @@ pub struct RunResponse {
     pub run: RunResult,
     /// One decimated timeline per scenario.
     pub timelines: Vec<UiTimeline>,
-    /// The key an export bundle for this run would be filed under.
-    pub bundle_key: String,
     /// A digest of the results, so two runs can be compared for identity.
     pub results_hash: Hash,
 }
 
 /// `POST /api/projects/{name}/run`
-pub fn run(state: &AppState, name: &str) -> Response {
-    respond((|| -> Result<RunResponse> {
-        let project = state.workspace.load_project(name)?;
+pub fn run(state: &AppState, name: &str, request: &Request) -> Response {
+    respond_at_revision((|| -> Result<(RunResponse, String)> {
+        let (project, revision) = load_for_request(state, name, request)?;
         let result = run::run_project(&project, clock::now_utc())?;
 
         let hours = project
@@ -449,12 +519,14 @@ pub fn run(state: &AppState, name: &str) -> Response {
             })
             .collect();
 
-        Ok(RunResponse {
-            bundle_key: export::bundle_key(&project, &result, &[])?,
-            results_hash: result.results_hash()?,
-            timelines,
-            run: result,
-        })
+        Ok((
+            RunResponse {
+                results_hash: result.results_hash()?,
+                timelines,
+                run: result,
+            },
+            revision,
+        ))
     })())
 }
 
@@ -592,10 +664,10 @@ fn peak_window(rows: &[IntervalRow], baseline: &[IntervalRow], hours: f64) -> Op
 
 /// `POST /api/projects/{name}/sensitivity`
 pub fn sensitivity(state: &AppState, name: &str, request: &Request) -> Response {
-    respond((|| -> Result<SensitivityResult> {
+    respond_at_revision((|| -> Result<(SensitivityResult, String)> {
         let body: SensitivityRequest = parse_body(request)?;
-        let project = state.workspace.load_project(name)?;
-        sensitivity::run(&project, &body)
+        let (project, revision) = load_for_request(state, name, request)?;
+        Ok((sensitivity::run(&project, &body)?, revision))
     })())
 }
 
@@ -615,14 +687,14 @@ pub struct ExportBody {
 
 /// `POST /api/projects/{name}/export`
 pub fn export(state: &AppState, name: &str, request: &Request) -> Response {
-    respond((|| -> Result<ExportBundle> {
+    respond_at_revision((|| -> Result<(ExportBundle, String)> {
         let body: ExportBody = if request.body.is_empty() {
             ExportBody::default()
         } else {
             parse_body(request)?
         };
 
-        let project = state.workspace.load_project(name)?;
+        let (project, revision) = load_for_request(state, name, request)?;
         let result = run::run_project(&project, clock::now_utc())?;
         let sensitivities = match body.sensitivity {
             Some(request) => vec![sensitivity::run(&project, &request)?],
@@ -631,7 +703,8 @@ pub fn export(state: &AppState, name: &str, request: &Request) -> Response {
 
         let key = export::bundle_key(&project, &result, &sensitivities)?;
         let directory = state.workspace.export_dir(&project.name, &key)?;
-        export::write_bundle(&directory, &project, &result, &sensitivities)
+        let bundle = export::write_bundle(&directory, &project, &result, &sensitivities)?;
+        Ok((bundle, revision))
     })())
 }
 
@@ -856,6 +929,42 @@ mod tests {
         let stale = suggest_mapping(&state, &json_request(&body));
         assert_ne!(stale.status, 200);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_name_survives_percent_encoding_in_any_script() {
+        // What `encodeURIComponent` produces for each, checked against the page's own
+        // function in `ui-tests/logic.test.mjs`.
+        for (encoded, expected) in [
+            ("load%20%E2%80%93%20site.csv", "load – site.csv"),
+            ("%E9%9B%BB%E5%8A%9B.csv", "電力.csv"),
+            ("M%C3%BCller.csv", "Müller.csv"),
+            ("plain.csv", "plain.csv"),
+            ("100%25%20load.csv", "100% load.csv"),
+        ] {
+            assert_eq!(decode_file_name(Some(encoded)).unwrap(), expected);
+        }
+        assert_eq!(decode_file_name(None).unwrap(), "upload.csv");
+    }
+
+    #[test]
+    fn an_encoded_file_name_cannot_carry_a_path_or_a_bad_byte() {
+        for encoded in [
+            "..%2F..%2Fevil.csv",
+            "%2Fetc%2Fpasswd",
+            "a%5Cb.csv",
+            "evil%00.csv",
+            "not%20percent%zz.csv",
+            "truncated%2",
+            "%FF%FE.csv",
+            "%2E%2E",
+        ] {
+            let error = decode_file_name(Some(encoded)).unwrap_err();
+            assert!(
+                matches!(error.http_status(), 400 | 422),
+                "{encoded}: {error}"
+            );
+        }
     }
 
     #[test]

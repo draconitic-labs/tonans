@@ -55,6 +55,15 @@ pub enum Error {
         message: String,
     },
 
+    /// The project on disk is not the one this request was made against.
+    #[error("{message}")]
+    Conflict {
+        /// Stable machine code, e.g. `conflict.project_changed`.
+        code: &'static str,
+        /// Human-readable explanation.
+        message: String,
+    },
+
     /// A name or path was unsafe, reserved, or outside the workspace.
     #[error("{message}")]
     UnsafePath {
@@ -115,6 +124,7 @@ impl Error {
             Error::Import { code, .. }
             | Error::LimitExceeded { code, .. }
             | Error::Validation { code, .. }
+            | Error::Conflict { code, .. }
             | Error::UnsafePath { code, .. }
             | Error::Schema { code, .. } => code,
             Error::NonFinite { .. } => "internal.non_finite",
@@ -133,6 +143,7 @@ impl Error {
         match self {
             Error::Import { .. } | Error::Validation { .. } | Error::Schema { .. } => 422,
             Error::LimitExceeded { .. } => 413,
+            Error::Conflict { .. } => 409,
             Error::UnsafePath { .. } => 400,
             Error::NonFinite { .. } | Error::Io { .. } | Error::Json { .. } => 500,
         }

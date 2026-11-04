@@ -25,6 +25,7 @@ const STATE_CHANGING: &[(&str, &str)] = &[
     ("PUT", "/api/projects/Demo%20-%20Riverside%20Works"),
     ("POST", "/api/upload"),
     ("POST", "/api/upload/sample"),
+    ("POST", "/api/upload/cancel"),
     ("POST", "/api/upload/suggest"),
     ("POST", "/api/projects/Demo%20-%20Riverside%20Works/import"),
     ("POST", "/api/projects/Demo%20-%20Riverside%20Works/run"),

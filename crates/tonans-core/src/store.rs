@@ -17,7 +17,7 @@
 //! The temporary file is removed if any step fails, so a crashed save leaves no
 //! debris to confuse the next listing.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::canonical::hash_bytes;
 use crate::error::{Error, Result};
 use crate::limits;
 use crate::paths::{confine, project_file_name, safe_name};
@@ -185,6 +186,17 @@ impl Workspace {
 
     /// Read a project.
     pub fn load_project(&self, name: &str) -> Result<Project> {
+        self.load_project_at_revision(name)
+            .map(|(project, _)| project)
+    }
+
+    /// Read a project, with the revision of the exact bytes that were read.
+    ///
+    /// A revision is the digest of the project file, so it needs no field in the schema,
+    /// changes with any write by any process, and cannot collide the way a timestamp can.
+    /// Two windows on one workspace are two processes, and this is how they notice each
+    /// other.
+    pub fn load_project_at_revision(&self, name: &str) -> Result<(Project, String)> {
         let path = self.project_path(name)?;
         let metadata = fs::metadata(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -204,9 +216,13 @@ impl Workspace {
                 format!("the project file for '{name}' is larger than Tonans will open"),
             ));
         }
-        let text = fs::read_to_string(&path)
-            .map_err(|e| Error::io(format!("reading the project '{name}'"), e))?;
-        let project = migrate(&text)?;
+        let bytes =
+            fs::read(&path).map_err(|e| Error::io(format!("reading the project '{name}'"), e))?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| Error::Schema {
+            code: "schema.unreadable",
+            message: format!("the project file for '{name}' is not UTF-8: {e}"),
+        })?;
+        let project = migrate(text)?;
         if project.name != name {
             return Err(Error::Schema {
                 code: "schema.project_name_mismatch",
@@ -217,7 +233,57 @@ impl Workspace {
                 ),
             });
         }
-        Ok(project)
+        Ok((project, hash_bytes(&bytes).bare_hex().to_string()))
+    }
+
+    /// Hold the workspace's write lock until the returned guard drops.
+    ///
+    /// Reading a revision and then writing is one operation only if nothing else can
+    /// write in between, and "anything else" includes another window, which is another
+    /// process. An advisory lock on a file in the workspace root covers both.
+    pub fn lock_for_write(&self) -> Result<WriteLock> {
+        let path = self.root.join(".tonans-write-lock");
+        if fs::symlink_metadata(&path).is_ok_and(|m| metadata_is_reparse(&m)) {
+            return Err(Error::UnsafePath {
+                code: "path.reparse_lock",
+                message: "the workspace's lock file is a link, which Tonans will not follow"
+                    .to_string(),
+            });
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| Error::io("opening the workspace's lock file", e))?;
+        file.lock()
+            .map_err(|e| Error::io("locking the workspace for writing", e))?;
+        Ok(WriteLock { _file: file })
+    }
+
+    /// Write a project only if the file on disk is still at `expected_revision`, and
+    /// return the new revision.
+    ///
+    /// A stale window gets [`Error::Conflict`] and writes nothing, so it cannot put back
+    /// what it last read over what another window has saved since.
+    pub fn save_project_at_revision(
+        &self,
+        project: &Project,
+        expected_revision: &str,
+    ) -> Result<String> {
+        let _lock = self.lock_for_write()?;
+        let (_, current) = self.load_project_at_revision(&project.name)?;
+        if current != expected_revision {
+            return Err(Error::Conflict {
+                code: "conflict.project_changed",
+                message: format!(
+                    "'{}' was changed somewhere else after this window read it, probably in \
+                     another Tonans window. Nothing was saved, so that change is intact.",
+                    project.name
+                ),
+            });
+        }
+        self.write_project(project)
     }
 
     /// Write a project, atomically.
@@ -225,6 +291,12 @@ impl Workspace {
     /// The project's own `name` decides the file it lands in, so a rename is a
     /// copy-then-delete by the user, not a silent overwrite by us.
     pub fn save_project(&self, project: &Project) -> Result<PathBuf> {
+        self.write_project(project)?;
+        self.project_path(&project.name)
+    }
+
+    /// Validate and write a project, and return the revision written.
+    pub fn write_project(&self, project: &Project) -> Result<String> {
         project.validate()?;
         let path = self.project_path(&project.name)?;
 
@@ -242,14 +314,14 @@ impl Workspace {
         }
 
         write_atomically(&path, json.as_bytes())?;
-        Ok(path)
+        Ok(hash_bytes(json.as_bytes()).bare_hex().to_string())
     }
 
     /// The directory one export bundle is written to, created if needed.
     ///
-    /// Bundles are keyed by all artifact-determining inputs, including the run
-    /// metadata and sensitivities. An identical export reuses a verified bundle;
-    /// a changed input gets a different key. Existing modified files are preserved.
+    /// Bundles are keyed by everything that determines their bytes, including the time of
+    /// the run they hold, so each export through the application is a new bundle in a new
+    /// directory. Existing files in a directory are preserved, never overwritten.
     pub fn export_dir(&self, project_name: &str, run_key: &str) -> Result<PathBuf> {
         let project = safe_name("project name", project_name)?;
         let key = safe_name("run key", run_key)?;
@@ -386,8 +458,48 @@ fn metadata_is_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
+/// The workspace's write lock. Released when this drops.
+#[derive(Debug)]
+pub struct WriteLock {
+    _file: File,
+}
+
+/// Write `bytes` over a file the user chose, in place in every way they would notice.
+///
+/// A dialog answered "replace", which is permission to change the contents and nothing
+/// else. So an existing file keeps its permissions, a link stays a link and its target
+/// gets the bytes, and a read-only file is refused. The write itself is still atomic.
+pub fn write_user_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => fs::canonicalize(path)
+            .map_err(|e| Error::io(format!("following the link at {}", path.display()), e))?,
+        _ => path.to_path_buf(),
+    };
+    let permissions = match fs::metadata(&target) {
+        Ok(metadata) => {
+            if metadata.permissions().readonly() {
+                return Err(Error::UnsafePath {
+                    code: "path.read_only",
+                    message: format!("{} is read-only, so it was not changed", target.display()),
+                });
+            }
+            Some(metadata.permissions())
+        }
+        Err(_) => None,
+    };
+    write_with_permissions(&target, bytes, permissions)
+}
+
 /// Write `bytes` to `path` such that a reader sees all of it or none of it.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_with_permissions(path, bytes, None)
+}
+
+fn write_with_permissions(
+    path: &Path,
+    bytes: &[u8],
+    permissions: Option<Permissions>,
+) -> Result<()> {
     let parent = path.parent().ok_or(Error::UnsafePath {
         code: "path.no_parent",
         message: "that path has no parent directory".to_string(),
@@ -417,6 +529,11 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
             .map_err(|e| Error::io(format!("creating {}", temporary.display()), e))?;
         file.write_all(bytes)
             .map_err(|e| Error::io(format!("writing {}", temporary.display()), e))?;
+        // Before the rename, so the file is never visible at the wrong permissions.
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)
+                .map_err(|e| Error::io(format!("setting up {}", temporary.display()), e))?;
+        }
         // Without this, `rename` can be ordered before the data reaches the disk,
         // and a power cut leaves a correctly-named file full of zeroes.
         file.sync_all()
@@ -456,6 +573,134 @@ fn replace_file(temporary: &Path, path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn revision_project(name: &str) -> Project {
+        let now = chrono::DateTime::from_timestamp(1_767_225_600, 0).unwrap();
+        Project::new("p", name, crate::schema::Site::default(), now).unwrap()
+    }
+
+    fn revision_workspace(label: &str) -> (Workspace, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-store-{label}-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        (Workspace::open(&root).unwrap(), root)
+    }
+
+    #[test]
+    fn a_stale_revision_is_refused_and_writes_nothing() {
+        let (workspace, root) = revision_workspace("stale");
+        let mut project = revision_project("Site");
+        let first = workspace.write_project(&project).unwrap();
+        assert_eq!(workspace.load_project_at_revision("Site").unwrap().1, first);
+
+        project.notes = "first window".to_string();
+        let second = workspace
+            .save_project_at_revision(&project, &first)
+            .unwrap();
+        assert_ne!(first, second);
+
+        project.notes = "second window, still holding the first revision".to_string();
+        let refused = workspace
+            .save_project_at_revision(&project, &first)
+            .unwrap_err();
+        assert_eq!(refused.code(), "conflict.project_changed");
+        assert_eq!(refused.http_status(), 409);
+        let (on_disk, current) = workspace.load_project_at_revision("Site").unwrap();
+        assert_eq!(on_disk.notes, "first window");
+        assert_eq!(current, second);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_revision_is_the_digest_of_the_file_so_any_writer_changes_it() {
+        let (workspace, root) = revision_workspace("digest");
+        let project = revision_project("Site");
+        let revision = workspace.write_project(&project).unwrap();
+        // Any other writer: a second process, a text editor, a restored backup.
+        let path = workspace.project_path("Site").unwrap();
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push('\n');
+        fs::write(&path, text).unwrap();
+        assert_ne!(
+            workspace.load_project_at_revision("Site").unwrap().1,
+            revision
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_write_lock_makes_a_second_taker_wait() {
+        let (workspace, root) = revision_workspace("lock");
+        let first = workspace.lock_for_write().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let other = workspace.clone();
+        let waiter = std::thread::spawn(move || {
+            let _second = other.lock_for_write().unwrap();
+            sender.send(()).unwrap();
+        });
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(150))
+                .is_err(),
+            "the lock was taken twice"
+        );
+        drop(first);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the lock was never released");
+        waiter.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chosen_file_keeps_its_permissions_and_a_link_stays_a_link() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let (_workspace, root) = revision_workspace("chosen");
+
+        let private = root.join("private.csv");
+        fs::write(&private, "old").unwrap();
+        fs::set_permissions(&private, Permissions::from_mode(0o600)).unwrap();
+        write_user_file(&private, b"new").unwrap();
+        assert_eq!(fs::read(&private).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let target = root.join("target.csv");
+        fs::write(&target, "old").unwrap();
+        let link = root.join("link.csv");
+        symlink(&target, &link).unwrap();
+        write_user_file(&link, b"through the link").unwrap();
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), b"through the link");
+
+        let locked = root.join("locked.csv");
+        fs::write(&locked, "old").unwrap();
+        fs::set_permissions(&locked, Permissions::from_mode(0o444)).unwrap();
+        let refused = write_user_file(&locked, b"new").unwrap_err();
+        assert_eq!(refused.code(), "path.read_only");
+        assert_eq!(fs::read(&locked).unwrap(), b"old");
+
+        let fresh = root.join("fresh.csv");
+        write_user_file(&fresh, b"made").unwrap();
+        assert_eq!(fs::read(&fresh).unwrap(), b"made");
+
+        // Nothing but the files named above: no temporary left behind.
+        let names: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.contains("tonans-tmp"))
+            .collect();
+        assert!(names.is_empty(), "{names:?}");
+        fs::remove_dir_all(root).unwrap();
+    }
     use crate::schema::Site;
     use chrono::TimeZone;
     use std::sync::{Arc, Barrier};
