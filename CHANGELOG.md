@@ -42,3 +42,29 @@ What else moves with this version:
   its model version, reports each cell's installed cost, and can carry new warnings.
 - **Exports.** The sensitivity CSV gains `installed_cost_usd` and `capex_per_kwh_usd`, and
   the provenance manifest gains `capex_per_kwh_usd`.
+
+Other results that could have been wrong before this version, none of which changes the model:
+
+- **A study could disagree with Results by the whole cost of a cost edit.** The study form kept
+  the first cost rate it saw and rounded it. If you changed a scenario's installed cost or size
+  with that form already open, or switched it to another scenario, the study's net present values
+  used the old rate. In the bundled demo, doubling the cost left the study 220,000 USD away from
+  Results. If you made a study after editing a cost, redo it.
+- **Results could be marked Current when they were not.** A run, a study, or an export that
+  finished after you opened another project, or saved a change, was shown as if it described what
+  was on screen. That includes one project's results under another's title. If you opened another
+  project or saved during a run on a large file, run it again.
+- **A second window could delete imported data.** Saving from a window opened before another
+  window imported a file put the empty project back. Now the save is refused, and nothing is
+  overwritten.
+- **A suggested mapping could be 1000 times wrong.** `kWhLoad` and similar headers were read as
+  Wh, and `LoadkW` as W. `price_eur_per_kwh` was read as dollars, a backup generator as the
+  critical load, and a running meter total as energy per interval. If you accepted a suggestion
+  for a header like these, check the figures on the data screen against a bill.
+
+Also changed in what the screen says:
+
+- Year 0 of the cash flow table shows installed cost in its own column, not under Replacement.
+- The best cell of a study states the axis value exactly, so it no longer reads 1 for 0.80.
+- The Flat energy price preset no longer keeps an earlier demand charge.
+- The annual grid cost tile says when its figure is scaled from a short file.
