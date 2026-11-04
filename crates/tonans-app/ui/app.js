@@ -497,7 +497,7 @@ function stepStates() {
     { view: 'scenarios', name: '2 Scenarios', done: count > 1 && !unsaved,
       note: `${count} scenario${count === 1 ? '' : 's'}${unsaved ? ', unsaved' : ''}` },
     { view: 'results', name: '3 Results', done: Boolean(state.run),
-      note: state.run ? 'Current' : 'Not run' },
+      note: state.run ? (unsaved ? 'From the last save' : 'Current') : 'Not run' },
     { view: 'sensitivity', name: '4 Sensitivity', done: Boolean(state.study),
       note: state.study ? `${state.study.cells.length} cells` : 'Optional' },
     { view: 'export', name: '5 Export', done: Boolean(state.bundle),
