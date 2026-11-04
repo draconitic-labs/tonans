@@ -144,6 +144,10 @@ pub struct SensitivityProvenance {
     pub scenario_id: String,
     /// Exact ordered axes and values that were recomputed for this export.
     pub axes: Vec<SensitivityAxis>,
+    /// The installed cost per kWh of nameplate that moved with battery energy, if the
+    /// study asked for that. Each cell's resulting cost is in the sensitivity CSV.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capex_per_kwh_usd: Option<f64>,
     /// Digest of the complete result, including every cell and warning.
     pub result_hash: Hash,
     /// Study warnings, repeated here so the manifest is useful without opening
@@ -228,6 +232,7 @@ impl Provenance {
             sensitivity_studies.push(SensitivityProvenance {
                 scenario_id: study.scenario_id.clone(),
                 axes: study.axes.clone(),
+                capex_per_kwh_usd: study.capex_per_kwh_usd,
                 result_hash: canonical_hash(study)?,
                 warnings: study.warnings.clone(),
             });

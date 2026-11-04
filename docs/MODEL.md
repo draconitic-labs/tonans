@@ -112,13 +112,22 @@ after storage**. Grid-origin battery energy and unknown initial battery energy a
 excluded. Sensitivity cells are complete reruns and use this same definition; a
 metric does not change meaning merely because an input is being swept.
 
-A sensitivity cell varies only the axes shown. Battery energy and battery power do not
-move installed cost by themselves, so a study of battery size either moves it at a stated
-price per kWh of nameplate, or keeps one installed cost in every cell and says in its
-warning ledger that net present value and payback then favour larger batteries. Battery
-power and replacement cost do not move with that price. The interface marks the best of
-the cells tested. That is the best of what was tried, not an optimum, because Tonans does
-not search.
+A sensitivity cell varies only the axes shown. Import price and demand price apply to the
+varied scenario and to the baseline in every cell, because a site pays the same prices
+whichever it picks: each cell's net present value equals what you get by setting both
+scenarios to that price and running them. A baseline with no demand charge takes the varied
+scenario's periods at that price. Size, cost, reserve, fade, and discount-rate axes describe
+the varied scenario, and the baseline stays as it is.
+
+Battery energy and battery power do not move installed cost by themselves, so a study of
+battery size either moves it at a stated price per kWh of nameplate, or keeps one installed
+cost in every cell and says in its warning ledger that net present value and payback then
+favour larger batteries. Battery power and replacement cost do not move with that price,
+and the ledger says so when either applies. Each cell's installed cost is in the exported
+sensitivity CSV and the report.
+
+The interface marks the best of the cells tested. That is the best of what was tried, not an
+optimum, because Tonans does not search.
 
 ## Energy identities
 

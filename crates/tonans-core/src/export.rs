@@ -555,7 +555,8 @@ fn sensitivity_csv(study: &SensitivityResult) -> String {
         let _ = axis;
     }
     out.push_str(concat!(
-        ",annual_grid_cost_usd,annual_savings_usd,npv_usd,simple_payback_years,",
+        ",installed_cost_usd,capex_per_kwh_usd,",
+        "annual_grid_cost_usd,annual_savings_usd,npv_usd,simple_payback_years,",
         "peak_import_kw,grid_import_kwh,unmet_critical_kwh,self_sufficiency_pct,",
         "min_soc_pct,equivalent_full_cycles\n"
     ));
@@ -568,7 +569,9 @@ fn sensitivity_csv(study: &SensitivityResult) -> String {
         let m = &cell.metrics;
         let _ = writeln!(
             out,
-            ",{cost},{saving},{npv},{payback},{peak},{import},{unmet},{sufficiency},{soc},{cycles}",
+            ",{installed},{rate},{cost},{saving},{npv},{payback},{peak},{import},{unmet},{sufficiency},{soc},{cycles}",
+            installed = money(m.installed_cost_usd),
+            rate = study.capex_per_kwh_usd.map_or_else(String::new, number),
             cost = money(m.annual_grid_cost_usd),
             saving = money(m.annual_savings_usd),
             npv = money(m.npv_usd),
@@ -660,7 +663,7 @@ mod tests {
                     param: SensitivityParam::CapexUsd,
                     values: vec![capex],
                 }],
-                capex_usd_per_kwh: None,
+                capex_per_kwh_usd: None,
             },
         )
         .unwrap()

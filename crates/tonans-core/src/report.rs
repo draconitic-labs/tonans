@@ -1007,7 +1007,7 @@ fn sensitivity_table(html: &mut String, study: &SensitivityResult, currency: &st
             escape(axis.param.label())
         );
     }
-    html.push_str("<th class=\"num\">Annual grid cost</th><th class=\"num\">Annual saving</th><th class=\"num\">NPV</th><th class=\"num\">Payback (years)</th><th class=\"num\">Peak import (kW)</th><th class=\"num\">Unmet critical (kWh)</th><th class=\"num\">Self-sufficiency (%)</th><th class=\"num\">Lowest SOC (%)</th></tr></thead>\n<tbody>\n");
+    html.push_str("<th class=\"num\">Installed cost</th><th class=\"num\">Annual grid cost</th><th class=\"num\">Annual saving</th><th class=\"num\">NPV</th><th class=\"num\">Payback (years)</th><th class=\"num\">Peak import (kW)</th><th class=\"num\">Unmet critical (kWh)</th><th class=\"num\">Self-sufficiency (%)</th><th class=\"num\">Lowest SOC (%)</th></tr></thead>\n<tbody>\n");
 
     for cell in &study.cells {
         html.push_str("<tr>");
@@ -1021,7 +1021,8 @@ fn sensitivity_table(html: &mut String, study: &SensitivityResult, currency: &st
         let m = &cell.metrics;
         let _ = writeln!(
             html,
-            "<td class=\"num\">{cost}</td><td class=\"num\">{saving}</td><td class=\"num {npv_class}\">{npv}</td><td class=\"num\">{payback}</td><td class=\"num\">{peak}</td><td class=\"num {unmet_class}\">{unmet}</td><td class=\"num\">{sufficiency}</td><td class=\"num\">{soc}</td></tr>",
+            "<td class=\"num\">{installed}</td><td class=\"num\">{cost}</td><td class=\"num\">{saving}</td><td class=\"num {npv_class}\">{npv}</td><td class=\"num\">{payback}</td><td class=\"num\">{peak}</td><td class=\"num {unmet_class}\">{unmet}</td><td class=\"num\">{sufficiency}</td><td class=\"num\">{soc}</td></tr>",
+            installed = money(m.installed_cost_usd, currency),
             cost = money(m.annual_grid_cost_usd, currency),
             saving = money(m.annual_savings_usd, currency),
             npv_class = if m.npv_usd >= 0.0 { "good" } else { "bad" },

@@ -13,6 +13,8 @@
 //! Cells are emitted in row-major order — first axis outer, second axis inner —
 //! and that order is stable across runs.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::economics;
@@ -21,6 +23,7 @@ use crate::error::{Error, Result, Warning, WarningLedger};
 use crate::limits;
 use crate::schema::{Project, Scenario, TariffSpec};
 use crate::timegrid::IntervalGrid;
+use crate::version::MODEL_VERSION;
 
 /// An assumption a sensitivity study can vary.
 ///
@@ -39,10 +42,11 @@ pub enum SensitivityParam {
     ReserveSocPct,
     /// Initial usable capacity, percent. The aged-battery axis.
     InitialCapacityPct,
-    /// Multiplier on the import price, whatever its source.
+    /// Multiplier on the import price, whatever its source. Applied to this scenario
+    /// and to the baseline, because a price is not something one scenario can have alone.
     ImportPriceMultiplier,
     /// Demand price, USD per kW-month. Applied to every demand period the tariff
-    /// defines.
+    /// defines, in this scenario and in the baseline.
     DemandPricePerKwMonthUsd,
     /// Calendar fade, percent per year.
     CalendarFadePctPerYear,
@@ -79,6 +83,36 @@ impl SensitivityParam {
                 | SensitivityParam::ReserveSocPct
                 | SensitivityParam::InitialCapacityPct
         )
+    }
+
+    /// Whether this parameter is a price the site pays whichever scenario it picks.
+    ///
+    /// Sweeping one of these in the candidate alone would compare a candidate at one
+    /// price against a baseline at another, and the result would mostly measure that gap:
+    /// raising the price would look like it makes storage worth less.
+    #[must_use]
+    pub const fn moves_baseline(self) -> bool {
+        matches!(
+            self,
+            SensitivityParam::ImportPriceMultiplier | SensitivityParam::DemandPricePerKwMonthUsd
+        )
+    }
+
+    /// Set this parameter on the baseline to match a candidate it has just been applied to.
+    ///
+    /// A baseline with no demand charge takes the candidate's periods, so the two are at
+    /// the same price rather than one of them paying nothing.
+    fn apply_to_baseline(self, baseline: &mut Scenario, candidate: &Scenario) {
+        match self {
+            SensitivityParam::ImportPriceMultiplier => {
+                baseline.tariff.import_price_multiplier = candidate.tariff.import_price_multiplier;
+            }
+            SensitivityParam::DemandPricePerKwMonthUsd => {
+                baseline.tariff.demand_prices_per_kw_month_usd =
+                    candidate.tariff.demand_prices_per_kw_month_usd.clone();
+            }
+            _ => {}
+        }
     }
 
     /// Apply this parameter to a scenario.
@@ -174,7 +208,7 @@ pub struct SensitivityRequest {
     /// nameplate. Without it every cell keeps the scenario's installed cost, so a larger
     /// battery costs the same as a smaller one and the warning ledger says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capex_usd_per_kwh: Option<f64>,
+    pub capex_per_kwh_usd: Option<f64>,
 }
 
 /// What each cell reports.
@@ -183,6 +217,8 @@ pub struct SensitivityRequest {
 /// columns of it is a table nobody checks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensitivityMetrics {
+    /// Installed cost in this cell, so that a reader can see whether it moved.
+    pub installed_cost_usd: f64,
     /// Grid cost over one year.
     pub annual_grid_cost_usd: f64,
     /// Saving against the project's baseline, over one year.
@@ -218,17 +254,21 @@ pub struct SensitivityCell {
 /// A completed study.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensitivityResult {
+    /// The version of the model this was produced by. A study's numbers depend on it, so
+    /// its identity must change with it.
+    pub model_version: String,
     /// The scenario that was perturbed.
     pub scenario_id: String,
     /// Its name.
     pub scenario_name: String,
-    /// The baseline savings are measured against.
+    /// The baseline savings are measured against. Price axes apply to it as well; see
+    /// [`SensitivityParam::moves_baseline`].
     pub baseline_scenario_id: String,
     /// The axes, echoed so a chart can label itself from the result alone.
     pub axes: Vec<SensitivityAxis>,
     /// The price the installed cost moved at, if the study asked for that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capex_usd_per_kwh: Option<f64>,
+    pub capex_per_kwh_usd: Option<f64>,
     /// Cells, row-major: first axis outer, second axis inner.
     pub cells: Vec<SensitivityCell>,
     /// Everything the reader must know.
@@ -260,8 +300,6 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
     validate_axes(&request.axes, scenario)?;
     validate_capex_scaling(request)?;
 
-    // The baseline, unperturbed. Every cell's saving is measured against it, and
-    // it does not move as the axes do.
     let baseline_spec = project.baseline().ok_or_else(|| {
         Error::validation(
             "validation.unknown_baseline",
@@ -269,14 +307,6 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
             "the baseline scenario does not exist",
         )
     })?;
-    let baseline_input = ResolvedInput::resolve(project, baseline_spec, &grid)?;
-    let baseline = engine::run(
-        baseline_spec,
-        &baseline_input.as_input(&grid),
-        EngineOptions {
-            retain_timeline: false,
-        },
-    )?;
 
     // Build and validate every perturbed scenario before running any of them.
     let combinations = combinations(&request.axes);
@@ -286,21 +316,19 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
         for (axis, value) in request.axes.iter().zip(values) {
             axis.param.apply(&mut candidate, *value)?;
         }
-        if let (Some(rate), Some(battery)) = (request.capex_usd_per_kwh, &candidate.battery) {
+        if let (Some(rate), Some(battery)) = (request.capex_per_kwh_usd, &candidate.battery) {
             candidate.economics.capex_usd = rate * battery.nameplate_energy_kwh;
         }
-        candidate.validate().map_err(|e| {
-            Error::validation(
-                "validation.sensitivity_cell_invalid",
-                "sensitivity.axes",
-                format!(
-                    "the combination {} produces an invalid scenario: {e}",
-                    describe(&request.axes, values)
-                ),
-            )
-        })?;
-        if let Some(dataset) = &project.dataset {
-            candidate.validate_against(dataset, &grid).map_err(|e| {
+
+        // Every cell's saving is measured against the baseline at the same prices. Size,
+        // cost, and rate axes describe the candidate, so the baseline stays as it is.
+        let mut baseline = baseline_spec.clone();
+        for axis in &request.axes {
+            axis.param.apply_to_baseline(&mut baseline, &candidate);
+        }
+
+        for checked in [&candidate, &baseline] {
+            checked.validate().map_err(|e| {
                 Error::validation(
                     "validation.sensitivity_cell_invalid",
                     "sensitivity.axes",
@@ -310,18 +338,64 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
                     ),
                 )
             })?;
+            if let Some(dataset) = &project.dataset {
+                checked.validate_against(dataset, &grid).map_err(|e| {
+                    Error::validation(
+                        "validation.sensitivity_cell_invalid",
+                        "sensitivity.axes",
+                        format!(
+                            "the combination {} produces an invalid scenario: {e}",
+                            describe(&request.axes, values)
+                        ),
+                    )
+                })?;
+            }
         }
-        prepared.push(candidate);
+        prepared.push((candidate, baseline));
     }
 
     let mut ledger = WarningLedger::new();
     if let Some(warning) = installed_cost_warning(request, scenario) {
         ledger.push(warning);
     }
+    if request.axes.iter().any(|axis| axis.param.moves_baseline()) {
+        ledger.push(Warning::info(
+            "sensitivity.prices_move_baseline",
+            format!(
+                "import and demand price axes apply to '{}' and to the baseline '{}' in every \
+                 cell, because a site pays the same prices whichever it picks. Each saving \
+                 compares the two at the same price.",
+                scenario.name, baseline_spec.name
+            ),
+        ));
+    }
+
+    // A baseline differs between cells only in its prices, so each distinct set of prices
+    // is simulated once. A grid of 256 size cells needs one baseline run, not 256.
+    let mut baselines: BTreeMap<Vec<u64>, engine::EngineResult> = BTreeMap::new();
     let mut cells = Vec::with_capacity(prepared.len());
 
-    for (candidate, values) in prepared.iter().zip(&combinations) {
-        let cell = evaluate_cell(project, candidate, &grid, &baseline, &mut ledger)?;
+    for ((candidate, baseline), values) in prepared.iter().zip(&combinations) {
+        let prices: Vec<u64> = request
+            .axes
+            .iter()
+            .zip(values)
+            .filter(|(axis, _)| axis.param.moves_baseline())
+            .map(|(_, value)| value.to_bits())
+            .collect();
+        if !baselines.contains_key(&prices) {
+            let input = ResolvedInput::resolve(project, baseline, &grid)?;
+            let result = engine::run(
+                baseline,
+                &input.as_input(&grid),
+                EngineOptions {
+                    retain_timeline: false,
+                },
+            )?;
+            baselines.insert(prices.clone(), result);
+        }
+        let baseline_result = &baselines[&prices];
+        let cell = evaluate_cell(project, candidate, &grid, baseline_result, &mut ledger)?;
         cells.push(SensitivityCell {
             axis_values: values.clone(),
             metrics: cell,
@@ -338,11 +412,12 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
     ));
 
     Ok(SensitivityResult {
+        model_version: MODEL_VERSION.to_string(),
         scenario_id: scenario.id.clone(),
         scenario_name: scenario.name.clone(),
         baseline_scenario_id: baseline_spec.id.clone(),
         axes: request.axes.clone(),
-        capex_usd_per_kwh: request.capex_usd_per_kwh,
+        capex_per_kwh_usd: request.capex_per_kwh_usd,
         cells,
         warnings: ledger.into_sorted(),
     })
@@ -374,6 +449,7 @@ fn evaluate_cell(
     )?;
 
     Ok(SensitivityMetrics {
+        installed_cost_usd: candidate.economics.capex_usd,
         annual_grid_cost_usd: economics.scenario_annual_grid_cost_usd,
         annual_savings_usd: economics.year_one_gross_savings_usd,
         npv_usd: economics.npv_usd,
@@ -491,13 +567,13 @@ fn validate_axes(axes: &[SensitivityAxis], scenario: &Scenario) -> Result<()> {
 }
 
 fn validate_capex_scaling(request: &SensitivityRequest) -> Result<()> {
-    let Some(rate) = request.capex_usd_per_kwh else {
+    let Some(rate) = request.capex_per_kwh_usd else {
         return Ok(());
     };
     let refuse = |code: &'static str, message: &str| {
         Err(Error::validation(
             code,
-            "sensitivity.capex_usd_per_kwh",
+            "sensitivity.capex_per_kwh_usd",
             message,
         ))
     };
@@ -528,18 +604,34 @@ fn has_axis(request: &SensitivityRequest, param: SensitivityParam) -> bool {
 
 /// What the reader must know about the installed cost across the cells.
 fn installed_cost_warning(request: &SensitivityRequest, scenario: &Scenario) -> Option<Warning> {
-    if let Some(rate) = request.capex_usd_per_kwh {
-        return Some(Warning::info(
-            "sensitivity.installed_cost_scaled",
-            format!(
-                "installed cost moves with battery energy in this study, at {rate} USD per kWh \
-                 of nameplate. Battery power does not move it, and neither does it move any \
-                 replacement cost."
-            ),
-        ));
+    let power_axis = has_axis(request, SensitivityParam::BatteryPowerKw);
+    if let Some(rate) = request.capex_per_kwh_usd {
+        let mut message = format!(
+            "installed cost moves with battery energy in this study, at {rate} USD per kWh of \
+             nameplate."
+        );
+        // Each of these makes one direction look cheaper than it is, so it is a caution
+        // rather than a note.
+        if power_axis {
+            message.push_str(
+                " Battery power does not move it, so more power costs nothing here and net \
+                 present value favours it.",
+            );
+        }
+        let replacement = scenario.economics.replacement.is_some();
+        if replacement {
+            message.push_str(
+                " The replacement cost does not move with it either, so larger batteries are \
+                 charged the same replacement as smaller ones.",
+            );
+        }
+        return Some(if power_axis || replacement {
+            Warning::caution("sensitivity.installed_cost_scaled", message)
+        } else {
+            Warning::info("sensitivity.installed_cost_scaled", message)
+        });
     }
-    let sizes_vary = has_axis(request, SensitivityParam::BatteryEnergyKwh)
-        || has_axis(request, SensitivityParam::BatteryPowerKw);
+    let sizes_vary = has_axis(request, SensitivityParam::BatteryEnergyKwh) || power_axis;
     (sizes_vary && !has_axis(request, SensitivityParam::CapexUsd)).then(|| {
         Warning::caution(
             "sensitivity.installed_cost_held",
@@ -591,9 +683,9 @@ pub fn default_demand_period() -> &'static str {
 mod tests {
     use super::*;
     use crate::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
+    use crate::run;
     use crate::schema::{BatterySpec, DispatchPolicy, GapPolicy, InverterSpec, SeriesKind, Site};
     use chrono::{DateTime, Utc};
-    use std::collections::BTreeMap;
 
     /// Two days of hourly load, a no-storage baseline, and a battery scenario.
     fn study_project() -> Project {
@@ -679,7 +771,7 @@ mod tests {
         SensitivityRequest {
             scenario_id: "candidate".to_string(),
             axes,
-            capex_usd_per_kwh: rate,
+            capex_per_kwh_usd: rate,
         }
     }
 
@@ -713,7 +805,7 @@ mod tests {
                 "cell at {energy} kWh"
             );
         }
-        assert_eq!(scaled.capex_usd_per_kwh, Some(500.0));
+        assert_eq!(scaled.capex_per_kwh_usd, Some(500.0));
     }
 
     #[test]
@@ -735,7 +827,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(held.cells[0].metrics, stated.cells[0].metrics);
-        assert_eq!(held.capex_usd_per_kwh, None);
+        assert_eq!(held.capex_per_kwh_usd, None);
 
         let code = |study: &SensitivityResult, code: &str| {
             study.warnings.iter().any(|warning| warning.code == code)
@@ -780,16 +872,152 @@ mod tests {
     }
 
     #[test]
-    fn a_request_written_before_this_field_existed_still_reads() {
+    fn a_request_written_before_the_rate_existed_still_reads_and_serializes_the_same() {
         let request: SensitivityRequest = serde_json::from_str(
             r#"{"scenario_id":"s","axes":[{"param":"capex_usd","values":[1]}]}"#,
         )
         .unwrap();
-        assert_eq!(request.capex_usd_per_kwh, None);
-        // And it serializes back the same, so an old study's identity does not move.
+        assert_eq!(request.capex_per_kwh_usd, None);
+        // The request is unchanged. The study it produces is not, and that is why
+        // MODEL_VERSION moved: see `every_result_names_the_model_that_produced_it`.
         assert!(!serde_json::to_string(&request)
             .unwrap()
-            .contains("capex_usd_per_kwh"));
+            .contains("capex_per_kwh_usd"));
+    }
+
+    #[test]
+    fn every_result_names_the_model_that_produced_it() {
+        let project = study_project();
+        let study = run(&project, &request(vec![energy_axis(vec![100.0])], None)).unwrap();
+        assert_eq!(study.model_version, MODEL_VERSION);
+    }
+
+    #[test]
+    fn a_grid_of_sizes_measures_every_cell_against_one_unchanged_baseline() {
+        let project = study_project();
+        let study = run(
+            &project,
+            &request(vec![energy_axis(vec![50.0, 100.0, 200.0])], Some(500.0)),
+        )
+        .unwrap();
+        let baseline_annual = run::run_project(&project, DateTime::from_timestamp(0, 0).unwrap())
+            .unwrap()
+            .baseline()
+            .unwrap()
+            .economics
+            .scenario_annual_grid_cost_usd;
+        for cell in &study.cells {
+            let m = &cell.metrics;
+            assert!(
+                (m.annual_savings_usd - (baseline_annual - m.annual_grid_cost_usd)).abs() < 1e-6,
+                "{cell:?}"
+            );
+        }
+        assert!(!study
+            .warnings
+            .iter()
+            .any(|w| w.code == "sensitivity.prices_move_baseline"));
+    }
+
+    #[test]
+    fn a_price_axis_moves_the_baseline_and_says_so() {
+        let mut project = study_project();
+        project.scenarios[1].tariff.demand_prices_per_kw_month_usd =
+            BTreeMap::from([("all".to_string(), 10.0)]);
+        // The baseline has no demand charge of its own, and takes the candidate's periods.
+        assert!(project.scenarios[0]
+            .tariff
+            .demand_prices_per_kw_month_usd
+            .is_empty());
+
+        for (param, values) in [
+            (SensitivityParam::ImportPriceMultiplier, vec![0.5, 1.5]),
+            (SensitivityParam::DemandPricePerKwMonthUsd, vec![5.0, 20.0]),
+        ] {
+            let study = run(
+                &project,
+                &request(
+                    vec![SensitivityAxis {
+                        param,
+                        values: values.clone(),
+                    }],
+                    None,
+                ),
+            )
+            .unwrap();
+            assert!(study
+                .warnings
+                .iter()
+                .any(|w| w.code == "sensitivity.prices_move_baseline"));
+
+            for (index, value) in values.iter().enumerate() {
+                let mut by_hand = project.clone();
+                for scenario in &mut by_hand.scenarios {
+                    param
+                        .apply(scenario, *value)
+                        .or_else(|_| {
+                            scenario.tariff.demand_prices_per_kw_month_usd =
+                                BTreeMap::from([("all".to_string(), *value)]);
+                            Ok::<(), Error>(())
+                        })
+                        .unwrap();
+                }
+                let result =
+                    run::run_project(&by_hand, DateTime::from_timestamp(0, 0).unwrap()).unwrap();
+                let candidate = result.scenario("candidate").unwrap();
+                assert_eq!(
+                    study.cells[index].metrics.npv_usd, candidate.economics.npv_usd,
+                    "{param:?} at {value}"
+                );
+                assert_eq!(
+                    study.cells[index].metrics.annual_savings_usd,
+                    candidate.economics.year_one_gross_savings_usd,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_cell_reports_the_cost_it_used() {
+        let project = study_project();
+        let scaled = run(
+            &project,
+            &request(vec![energy_axis(vec![100.0, 200.0])], Some(500.0)),
+        )
+        .unwrap();
+        assert_eq!(scaled.cells[0].metrics.installed_cost_usd, 50_000.0);
+        assert_eq!(scaled.cells[1].metrics.installed_cost_usd, 100_000.0);
+        let held = run(
+            &project,
+            &request(vec![energy_axis(vec![100.0, 200.0])], None),
+        )
+        .unwrap();
+        assert_eq!(held.cells[1].metrics.installed_cost_usd, 10_000.0);
+    }
+
+    #[test]
+    fn a_scaled_study_cautions_about_what_does_not_scale() {
+        let project = study_project();
+        let severity = |axes, rate| {
+            let study = run(&project, &request(axes, rate)).unwrap();
+            let warning = study
+                .warnings
+                .iter()
+                .find(|w| w.code == "sensitivity.installed_cost_scaled")
+                .cloned()
+                .unwrap();
+            (warning.severity, warning.message)
+        };
+        let power = SensitivityAxis {
+            param: SensitivityParam::BatteryPowerKw,
+            values: vec![25.0, 50.0],
+        };
+        let (level, message) = severity(vec![energy_axis(vec![100.0]), power], Some(500.0));
+        assert_eq!(level, crate::error::Severity::Caution);
+        assert!(message.contains("more power costs nothing"), "{message}");
+        // With nothing left out, the rate is only a note.
+        let (level, _) = severity(vec![energy_axis(vec![100.0])], Some(500.0));
+        assert_eq!(level, crate::error::Severity::Info);
     }
 
     #[test]

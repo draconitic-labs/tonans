@@ -23,6 +23,7 @@ use tonans_core::schema::{
     InverterSpec, OutageSpec, OutageWindow, Project, RateSource, ReplacementSpec, Scenario,
     ScheduleEntry, SeriesKind, Site, TariffSpec, TemperatureDerate, TemperatureDeratePoint,
 };
+use tonans_core::sensitivity::{self, SensitivityAxis, SensitivityParam, SensitivityRequest};
 use tonans_core::units::unit_for_field;
 
 // ---------------------------------------------------------------------------
@@ -142,6 +143,38 @@ fn every_numeric_leaf_in_a_populated_run_result_carries_a_unit() {
                 text
             })
     );
+}
+
+#[test]
+fn every_measured_number_in_a_study_cell_carries_a_unit() {
+    let project = populated_project();
+    let scenario = project
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.battery.is_some())
+        .expect("the populated project has a battery scenario");
+    let study = sensitivity::run(
+        &project,
+        &SensitivityRequest {
+            scenario_id: scenario.id.clone(),
+            axes: vec![SensitivityAxis {
+                param: SensitivityParam::BatteryEnergyKwh,
+                values: vec![scenario.battery.as_ref().unwrap().nameplate_energy_kwh],
+            }],
+            capex_per_kwh_usd: Some(500.0),
+        },
+    )
+    .expect("the study runs");
+
+    // Axis values are named by their axis's label, not by a field, so the measured
+    // numbers here are the metrics and the rate.
+    let mut out = Walk::default();
+    let rate = serde_json::json!({ "capex_per_kwh_usd": study.capex_per_kwh_usd });
+    let metrics = serde_json::to_value(&study.cells[0].metrics).expect("metrics serialize");
+    walk(&rate, "", "", &mut out);
+    walk(&metrics, "", "", &mut out);
+    assert!(out.names.contains("installed_cost_usd"));
+    assert!(out.unlabelled.is_empty(), "{:?}", out.unlabelled);
 }
 
 /// The contract is worth nothing if the walk never reached the numbers.
