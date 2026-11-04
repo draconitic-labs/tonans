@@ -24,7 +24,7 @@ Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 ```
 
-## Pending before publication
+## Pending before a binary release
 
 ### Browser walkthrough
 
@@ -45,9 +45,12 @@ the page: all eight columns mapped in the import form, 8,760 intervals imported,
 scenarios compared, a 12-cell sensitivity grid run, and a bundle exported whose seven
 files all pass `SHA256SUMS.txt`, with no script in `report.html`. After stopping the
 server from the UI and restarting, the reopened project reproduced model input hash
-`057ae97fc9ff` and project hash `18b39fd1f6f4` with identical results. The walkthrough
-found and fixed one defect: the scenario count stayed stale after saving. Rerun it against
-the staged Windows package before publishing a binary.
+`057ae97fc9ff` and project hash `18b39fd1f6f4` with identical results. This run found and
+fixed the scenario count staying stale after saving, and an independent review then found a
+second save defect, now fixed and rechecked in the browser: after one save, later edits were
+dropped by the next save. No package digest applies to this source build. Rerun the
+walkthrough against the staged Windows package and record its digest before publishing a
+binary.
 
 ### Final integrated gate rerun
 
