@@ -12,6 +12,7 @@ Before opening a pull request, run:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+node --test crates/tonans-app/ui-tests/logic.test.mjs
 ```
 
 Changes to the energy model need a hand-calculated test. Include your Tonans version, operating system and a synthetic example in bug reports; do not attach real site data.

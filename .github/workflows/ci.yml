@@ -45,8 +45,20 @@ jobs:
       - name: Test the workspace except the shell's test binary
         if: runner.os == 'Windows'
         run: cargo test --workspace --exclude tonans-desktop --locked
+      # Node is on the runner images. The tests need it and nothing else.
+      - name: Test the page's rules
+        run: node --test crates/tonans-app/ui-tests/logic.test.mjs
       - run: cargo build --workspace --release --locked
-      - name: Smoke-test packaged command interface
+      - name: Command prints its help
         run: cargo run --release --locked -p tonans-app -- --help
-      - name: Smoke-test desktop command line
+      - name: Desktop binary prints its version
+        if: runner.os == 'Linux'
+        run: |
+          version="$(cargo run --release --locked -p tonans-desktop -- --version)"
+          echo "$version"
+          grep -E '^Tonans [0-9]+\.[0-9]+\.[0-9]+ \(model [0-9]+\.[0-9]+\.[0-9]+\)$' <<<"$version"
+      # A Windows-subsystem binary has no console to print to, so this proves only that the
+      # binary and its libraries load and that it exits cleanly.
+      - name: Desktop binary loads and exits
+        if: runner.os == 'Windows'
         run: cargo run --release --locked -p tonans-desktop -- --version
