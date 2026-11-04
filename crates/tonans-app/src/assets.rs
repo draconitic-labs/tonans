@@ -13,6 +13,32 @@ const SCRIPT: &str = include_str!("../ui/app.js");
 const STYLESHEET: &str = include_str!("../ui/styles.css");
 const FAVICON: &str = include_str!("../ui/favicon.svg");
 
+/// Barlow, under the SIL Open Font License (`ui/fonts/OFL.txt`). Its letterforms come
+/// from highway signs and equipment plates, and it is compiled in so the interface
+/// looks the same on every machine with no font fetched from anywhere.
+const FONTS: &[(&str, &[u8])] = &[
+    (
+        "barlow-400.woff2",
+        include_bytes!("../ui/fonts/barlow-400.woff2"),
+    ),
+    (
+        "barlow-500.woff2",
+        include_bytes!("../ui/fonts/barlow-500.woff2"),
+    ),
+    (
+        "barlow-600.woff2",
+        include_bytes!("../ui/fonts/barlow-600.woff2"),
+    ),
+    (
+        "barlow-semi-condensed-500.woff2",
+        include_bytes!("../ui/fonts/barlow-semi-condensed-500.woff2"),
+    ),
+    (
+        "barlow-semi-condensed-600.woff2",
+        include_bytes!("../ui/fonts/barlow-semi-condensed-600.woff2"),
+    ),
+];
+
 /// `GET /`
 pub fn index() -> Response {
     Response::new(200, "text/html; charset=utf-8", INDEX)
@@ -33,6 +59,14 @@ pub fn favicon() -> Response {
     Response::new(200, "image/svg+xml", FAVICON)
 }
 
+/// `GET /fonts/{name}`. Only the names compiled in exist.
+pub fn font(name: &str) -> Option<Response> {
+    FONTS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, bytes)| Response::new(200, "font/woff2", *bytes))
+}
+
 /// `GET /palette.css`
 ///
 /// Generated from the single validated table in `tonans_core::svg::palette`, rather
@@ -43,7 +77,7 @@ pub fn palette() -> Response {
     Response::new(
         200,
         "text/css; charset=utf-8",
-        tonans_core::svg::palette_css(),
+        tonans_core::svg::palette_css() + &tonans_core::svg::ramp_css(),
     )
 }
 
@@ -151,6 +185,30 @@ mod tests {
         assert!(SCRIPT.contains("if (!unit) missingUnits.push(header)"));
         assert!(!SCRIPT.contains("guessRole("));
         assert!(!SCRIPT.contains("guessUnit("));
+    }
+
+    #[test]
+    fn a_mapping_suggestion_only_happens_when_the_user_asks() {
+        // The product does not guess silently: rows start unmapped, and the one call to
+        // the suggestion route is the button's click handler.
+        assert_eq!(SCRIPT.matches("/api/upload/suggest").count(), 1);
+        assert_eq!(SCRIPT.matches("suggestFromHeaders(").count(), 2);
+        assert!(SCRIPT.contains("onclick: () => suggestFromHeaders(receipt)"));
+        assert!(SCRIPT.contains("role: '__unmapped'"));
+        // And a standing suggestion holds the import until the user has reviewed it.
+        assert!(SCRIPT.contains("go.disabled = standing && !state.mappingReviewed"));
+    }
+
+    #[test]
+    fn every_font_the_stylesheet_names_is_compiled_in() {
+        for (index, _) in STYLESHEET.match_indices("url(\"/fonts/") {
+            let rest = &STYLESHEET[index + "url(\"/fonts/".len()..];
+            let name = &rest[..rest.find('"').unwrap()];
+            assert!(font(name).is_some(), "styles.css names {name}");
+        }
+        assert!(STYLESHEET.contains("/fonts/barlow-400.woff2"));
+        assert!(font("../../etc/passwd").is_none());
+        assert!(font("OFL.txt").is_none());
     }
 
     #[test]

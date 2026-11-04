@@ -1251,7 +1251,10 @@ fn classify_column(header: &str, samples: &[&str]) -> Option<ColumnSuggestion> {
         return Some(suggestion(
             "temperature",
             unit,
-            format!("The header '{shown}' names a temperature."),
+            format!(
+                "The header '{shown}' names a temperature{}.",
+                unit.map_or(String::new(), |unit| format!(", in {}", unit.label()))
+            ),
             None,
         ));
     }
@@ -1275,15 +1278,17 @@ fn classify_column(header: &str, samples: &[&str]) -> Option<ColumnSuggestion> {
     } else {
         return None;
     };
+    let unit = power_unit(&words);
     let check = has(&["net"]).then(|| {
         "'Net' may mean generation was already subtracted. Mapping it as load while also \
          mapping generation would count the generation twice."
             .to_string()
     });
+    let in_unit = unit.map_or(String::new(), |unit| format!(", in {}", unit.label()));
     Some(suggestion(
         role,
-        power_unit(&words),
-        format!("The header '{shown}' names {phrase}."),
+        unit,
+        format!("The header '{shown}' names {phrase}{in_unit}."),
         check,
     ))
 }

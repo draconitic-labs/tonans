@@ -252,6 +252,9 @@ impl Router {
             ("GET", ["styles.css"]) => assets::stylesheet(),
             ("GET", ["palette.css"]) => assets::palette(),
             ("GET", ["favicon.svg"]) => assets::favicon(),
+            ("GET", ["fonts", name]) => assets::font(name).unwrap_or_else(|| {
+                problem(404, "server.not_found", "Tonans does not ship that font.")
+            }),
 
             ("GET", ["api", "session"]) => api::session(state),
             ("GET", ["api", "projects"]) => api::list_projects(state),
@@ -259,6 +262,10 @@ impl Router {
             ("GET", ["api", "projects", name]) => api::open_project(state, name),
             ("PUT", ["api", "projects", name]) => api::save_project(state, name, request),
             ("POST", ["api", "upload"]) => api::upload(state, request),
+            ("POST", ["api", "upload", "sample"]) => api::upload_sample(state),
+            ("POST", ["api", "upload", "suggest"]) => api::suggest_mapping(state, request),
+            ("GET", ["api", "templates", "interval-csv"]) => api::csv_template(),
+            ("GET", ["api", "projects", name, "profile"]) => api::profile(state, name),
             ("POST", ["api", "projects", name, "import"]) => api::import(state, name, request),
             ("POST", ["api", "projects", name, "run"]) => api::run(state, name),
             ("POST", ["api", "projects", name, "sensitivity"]) => {

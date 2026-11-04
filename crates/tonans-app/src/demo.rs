@@ -25,7 +25,10 @@ use crate::clock;
 use crate::state::DEMO_PROJECT_NAME;
 
 /// A synthetic year of hourly data for a light-industrial site.
-const DEMO_CSV: &str = include_str!("../../../samples/riverside-works-2024.csv");
+pub const DEMO_CSV: &str = include_str!("../../../samples/riverside-works-2024.csv");
+
+/// The name the sample is offered under when a user imports it into their own project.
+pub const DEMO_CSV_NAME: &str = "riverside-works-2024.csv";
 
 /// The site's timezone. Naive timestamps in the CSV would be read in this zone; the
 /// sample carries explicit offsets, so they are not.

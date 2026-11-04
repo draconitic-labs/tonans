@@ -38,6 +38,8 @@ pub struct StagedUpload {
     pub filename: String,
     /// The exact bytes uploaded.
     pub bytes: Vec<u8>,
+    /// Whether these are the bundled synthetic sample, which an import must say.
+    pub synthetic: bool,
 }
 
 /// Everything a request handler can reach.
@@ -73,6 +75,15 @@ impl AppState {
 
     /// Stage an upload, evicting any previous one.
     pub fn stage_upload(&self, filename: String, bytes: Vec<u8>) -> Result<String> {
+        self.stage(filename, bytes, false)
+    }
+
+    /// Stage the bundled sample, marked so that importing it says it is synthetic.
+    pub fn stage_sample(&self, filename: String, bytes: Vec<u8>) -> Result<String> {
+        self.stage(filename, bytes, true)
+    }
+
+    fn stage(&self, filename: String, bytes: Vec<u8>, synthetic: bool) -> Result<String> {
         if bytes.len() > limits::MAX_CSV_BYTES {
             return Err(Error::limit(
                 "limit.csv_bytes",
@@ -87,6 +98,7 @@ impl AppState {
             id: id.clone(),
             filename,
             bytes,
+            synthetic,
         });
         Ok(id)
     }
@@ -111,6 +123,23 @@ impl AppState {
                 "validation.unknown_upload",
                 "import.upload_id",
                 "no file is staged for import. Choose a file first.",
+            )),
+        }
+    }
+
+    /// Read the staged upload without consuming it, if its id matches.
+    pub fn with_upload<T>(
+        &self,
+        id: &str,
+        read: impl FnOnce(&StagedUpload) -> Result<T>,
+    ) -> Result<T> {
+        let slot = self.upload.lock().map_err(poisoned)?;
+        match slot.as_ref() {
+            Some(upload) if upload.id == id => read(upload),
+            _ => Err(Error::validation(
+                "validation.unknown_upload",
+                "import.upload_id",
+                "that upload is no longer staged. Choose the file again.",
             )),
         }
     }
