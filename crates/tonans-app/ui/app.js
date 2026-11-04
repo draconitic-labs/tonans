@@ -22,6 +22,7 @@
 
 import {
   encodeFileNameHeader,
+  fileTooLarge,
   resultsStatus,
   sendTagged,
 } from '/logic.mjs';
@@ -1046,13 +1047,24 @@ function sourceChooser(project) {
     const file = picker.files[0];
     picker.value = '';
     if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const receipt = await guard(() => api('/api/upload', { method: 'POST', raw: bytes, filename: file.name }));
-    if (receipt) receiveUpload(receipt);
+    // From the file's metadata, before any of it is read: a page that reads first runs
+    // out of memory on the file it was going to refuse.
+    const refusal = fileTooLarge(file.name, file.size, state.session.limits.max_csv_bytes);
+    if (refusal) {
+      toast(refusal, 'limit.csv_bytes');
+      return;
+    }
+    const into = state.project.name;
+    const receipt = await guard(async () => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      return api('/api/upload', { method: 'POST', raw: bytes, filename: file.name });
+    });
+    if (receipt) receiveUpload(receipt, into);
   });
   const sample = el('button', { type: 'button', text: 'Use the sample data', onclick: async () => {
+    const into = state.project.name;
     const receipt = await guard(() => api('/api/upload/sample', { method: 'POST' }));
-    if (receipt) receiveUpload(receipt);
+    if (receipt) receiveUpload(receipt, into);
   } });
   const template = el('button', { type: 'button', text: 'Save a CSV template', onclick: saveTemplate });
   box.appendChild(el('div', { class: 'row' }, [
@@ -1069,7 +1081,12 @@ function sourceChooser(project) {
   return box;
 }
 
-function receiveUpload(receipt) {
+function receiveUpload(receipt, into) {
+  // The user has moved on to another project, and this file was not meant for it.
+  if (state.project?.name !== into) {
+    api('/api/upload/cancel', { method: 'POST', body: { upload_id: receipt.upload_id } }).catch(() => {});
+    return;
+  }
   state.upload = receipt;
   state.mapping = receipt.headers.map(() => ({ role: '__unmapped', unit: '', why: null, check: null }));
   state.importSettings = {
@@ -1369,7 +1386,7 @@ function mappingCard(receipt) {
   card.appendChild(el('div', { class: 'row' }, [
     review,
     go,
-    el('button', { type: 'button', text: 'Cancel', onclick: () => { state.upload = null; state.mapping = null; renderData(); renderNext(); } }),
+    el('button', { type: 'button', text: 'Cancel', onclick: () => { forgetStagedUpload(); state.upload = null; state.mapping = null; renderData(); renderNext(); } }),
   ]));
   setTimeout(syncImportButton, 0);
   return card;

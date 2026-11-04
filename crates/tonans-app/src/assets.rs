@@ -209,6 +209,15 @@ mod tests {
     }
 
     #[test]
+    fn a_large_file_is_measured_before_any_of_it_is_read() {
+        let code = code_only(SCRIPT);
+        let measured = code.find("fileTooLarge(file.name, file.size").unwrap();
+        let read = code.find("file.arrayBuffer()").unwrap();
+        assert!(measured < read);
+        assert!(code.contains("encodeFileNameHeader(filename"));
+    }
+
+    #[test]
     fn import_mapping_requires_explicit_meaning_and_unit_choices() {
         assert!(SCRIPT.contains("['__unmapped', 'Choose meaning…']"));
         assert!(SCRIPT.contains("['__timestamp', 'Timestamp']"));
