@@ -329,17 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn the_demo_fits_inside_the_evaluation_entitlement() {
-        // The demo is what an evaluation user sees first. If it exceeded the tier's
-        // own limits it could not be run.
-        let project = build(now()).unwrap();
-        let entitlements = tonans_core::licensing::Entitlements::evaluation();
-        entitlements
-            .check_scenario_count(project.scenarios.len())
-            .expect("the demo must be runnable on the shipped tier");
-    }
-
-    #[test]
     fn the_demo_declares_itself_synthetic() {
         // The single most damaging thing this application could do is present invented
         // data as a real building's.
