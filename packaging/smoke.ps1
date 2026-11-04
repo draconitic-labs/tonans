@@ -204,7 +204,7 @@ try {
         # browser calls it same-origin. Pinning Host is what stops it.
         $response = Invoke-Raw -Method GET -Path '/api/session' -HostHeader 'evil.test' -Port $port -Token $token
         $status = Get-Status $response
-        if ($status -ne 400) { "a request with Host: evil.test returned $status, expected 400" }
+        if ($status -ne 403) { "a request with Host: evil.test returned $status, expected 403" }
     }
 
     Check 'a cross-origin request is refused' {

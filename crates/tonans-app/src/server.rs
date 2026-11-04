@@ -18,7 +18,8 @@
 //!    treats the response as same-origin, and the same-origin policy stops helping.
 //! 4. **Refuse a cross-origin `Origin`.**
 //! 5. **Bound every request** — body size per route, a fixed worker pool, and a
-//!    fixed-window rate limit. The likeliest attacker here is a runaway loop.
+//!    fixed-window rate limit on authenticated control routes. The likeliest attacker
+//!    here is a runaway loop.
 //! 6. **Send a restrictive CSP**, so the page cannot fetch, frame, or execute
 //!    anything it did not ship with.
 //!
@@ -178,16 +179,15 @@ impl Router {
 
         // DNS rebinding: a page on `evil.test` whose DNS answer is 127.0.0.1 reaches
         // this socket, and the browser calls it same-origin. Pinning `Host` to the
-        // address we bound turns that into a 400 before anything else happens.
+        // address we bound turns that into a 403 before anything else happens.
         let expected = state.bind.to_string();
         let localhost = format!("localhost:{}", state.bind.port());
         let host = request.header("host").unwrap_or_default();
         if host != expected && host != localhost {
             return Some(problem(
-                400,
+                403,
                 "server.bad_host",
-                "This request did not arrive at the address Tonans is serving. Open the link Tonans \
-                 printed when it started.",
+                "This request did not arrive at the address Tonans is serving.",
             ));
         }
 
@@ -206,15 +206,6 @@ impl Router {
             }
         }
 
-        if !state.allow_request() {
-            return Some(problem(
-                429,
-                "server.rate_limited",
-                "Too many requests. Tonans is a single-user local application; this many requests in \
-                 this short a time means something is looping.",
-            ));
-        }
-
         // The token gates every control route, and only the control routes: the static
         // assets hold no secrets, and the page needs them before it has a token to send.
         // Use the router's exact segment interpretation. Raw-prefix checks allow
@@ -229,7 +220,19 @@ impl Router {
                     401,
                     "server.unauthorized",
                     "This request carried no valid launch token. Tonans mints one per launch and \
-                     prints it in the URL; open that link.",
+                     hands it to the page it serves.",
+                ));
+            }
+
+            // After the token, deliberately. A web page cannot read these responses, but a
+            // no-cors GET carries no Origin and reaches this far, so counting refused
+            // requests would let any page spend the budget and lock the real UI out.
+            if !state.allow_request() {
+                return Some(problem(
+                    429,
+                    "server.rate_limited",
+                    "Too many requests. Tonans is a single-user local application; this many \
+                     requests in this short a time means something is looping.",
                 ));
             }
         }
@@ -321,6 +324,75 @@ mod tests {
             );
             assert!(router.preflight(&request).is_none(), "{path}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_refused_request_does_not_spend_the_rate_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-rate-regression-{}-{}",
+            std::process::id(),
+            token::mint().unwrap()
+        ));
+        let server = Server::bind(Workspace::open(&root).unwrap(), 0).unwrap();
+        let router = Router {
+            state: server.state,
+        };
+        let request = |authorized: bool| {
+            let mut headers = BTreeMap::from([("host".into(), server.address.to_string())]);
+            if authorized {
+                headers.insert(
+                    "authorization".into(),
+                    format!("Bearer {}", router.state.token),
+                );
+            }
+            Request {
+                method: "GET".into(),
+                path: "/api/projects".into(),
+                headers,
+                body: Vec::new(),
+            }
+        };
+
+        // A page can send these with no Origin. They must not lock the real UI out.
+        for _ in 0..700 {
+            assert_eq!(
+                router.preflight(&request(false)).map(|r| r.status),
+                Some(401)
+            );
+        }
+        assert!(router.preflight(&request(true)).is_none());
+
+        // The budget still bounds a runaway loop that does hold the token.
+        let mut limited = false;
+        for _ in 0..700 {
+            if router.preflight(&request(true)).map(|r| r.status) == Some(429) {
+                limited = true;
+                break;
+            }
+        }
+        assert!(limited, "an authorized runaway loop was never rate limited");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_rebound_host_is_forbidden() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-host-regression-{}-{}",
+            std::process::id(),
+            token::mint().unwrap()
+        ));
+        let server = Server::bind(Workspace::open(&root).unwrap(), 0).unwrap();
+        let router = Router {
+            state: server.state,
+        };
+        let request = Request {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: BTreeMap::from([("host".into(), "rebind.attacker.example".to_string())]),
+            body: Vec::new(),
+        };
+        assert_eq!(router.preflight(&request).map(|r| r.status), Some(403));
         std::fs::remove_dir_all(root).unwrap();
     }
 
