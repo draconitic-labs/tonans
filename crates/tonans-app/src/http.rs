@@ -155,6 +155,24 @@ pub fn internal_error() -> Response {
     )
 }
 
+/// Do work that allocates a lot on a thread that ends with it.
+///
+/// A run of the largest project allowed allocates about 2.4 GB. On Linux the allocator keeps
+/// what a thread frees for that thread, and hands a finished thread's memory to the next
+/// thread that starts. Done on the pool's workers, each of the eight would keep its own 2 GB,
+/// so the process would grow by that much a run until the machine ran out. Done on threads like
+/// this one, each run reuses the memory of the one before. Only the heavy routes do this: a
+/// small request on such a thread could pick up that memory just as a run starts, and the run
+/// would then take new memory of its own.
+pub fn on_its_own_thread<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(work)
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
 /// Serve until `stop` is set.
 ///
 /// Blocks. `stop` is polled between accepts, and the caller is expected to poke the
@@ -253,7 +271,7 @@ fn answer<H: Handler>(reader: &mut BufReader<DeadlineStream>, handler: &H) -> Re
                 match read_body(reader, &request.headers, limit) {
                     Ok(body) => {
                         request.body = body;
-                        handle_on_its_own_thread(handler, &request)
+                        handler.handle(&request)
                     }
                     Err(status) => bad_request(status),
                 }
@@ -261,22 +279,6 @@ fn answer<H: Handler>(reader: &mut BufReader<DeadlineStream>, handler: &H) -> Re
         },
         Err(status) => bad_request(status),
     }
-}
-
-/// Answer a request on a thread that ends with it.
-///
-/// A run of the largest project allowed allocates about 2.4 GB. On Linux the allocator keeps
-/// what a thread frees for that thread, and hands a finished thread's memory to the next
-/// thread that starts. Run on the pool's workers, each of the eight kept its own 2 GB, so the
-/// process grew by that much a run until the machine ran out. On threads like this one, each
-/// run reuses the memory of the one before.
-fn handle_on_its_own_thread<H: Handler>(handler: &H, request: &Request) -> Response {
-    std::thread::scope(|scope| {
-        scope
-            .spawn(|| handler.handle(request))
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
 }
 
 fn bad_request(status: u16) -> Response {
@@ -590,44 +592,32 @@ mod tests {
     }
 
     #[test]
-    fn each_request_is_answered_on_a_thread_that_ends_with_it() {
-        // If a worker ran the handler itself, each worker would keep the memory of the
-        // largest request it ever served. Measured on 105,120 intervals and four scenarios:
-        // 1.9 GB, 3.8 GB, then killed at an 8 GB ceiling, against a flat 2.0 GB this way.
-        struct Recording(Mutex<Vec<std::thread::ThreadId>>);
-        impl Handler for Recording {
-            fn handle(&self, _request: &Request) -> Response {
-                self.0.lock().unwrap().push(std::thread::current().id());
-                Response::json(200, "{}")
-            }
-            fn body_limit(&self, _method: &str, _path: &str) -> usize {
-                0
-            }
+    fn heavy_work_runs_on_a_thread_that_ends_with_it() {
+        // Measured on 105,120 intervals and four scenarios, with the page's small requests
+        // alongside. On the workers, memory after each run read 1.9 GB, 3.8 GB, then the process
+        // was killed at an 8 GB ceiling. This way it read 110 MB to 330 MB over 14 runs.
+        let here = std::thread::current().id();
+        let first = on_its_own_thread(|| std::thread::current().id());
+        let second = on_its_own_thread(|| std::thread::current().id());
+        assert_ne!(first, here);
+        assert_ne!(second, here);
+        assert_ne!(first, second);
+
+        // A panic reaches the worker's catch, which is what answers the client.
+        let caught = std::panic::catch_unwind(|| on_its_own_thread(|| panic!("boom")));
+        assert!(caught.is_err());
+
+        // The routes that use it.
+        let server = include_str!("server.rs");
+        for route in ["import", "run", "sensitivity", "export"] {
+            let at = server
+                .find(&format!("api::{route}(state, name, request)"))
+                .unwrap_or_else(|| panic!("{route}"));
+            assert!(
+                server[at.saturating_sub(40)..at].contains("on_its_own_thread"),
+                "{route}"
+            );
         }
-        let handler = Recording(Mutex::new(Vec::new()));
-        let (mut first, first_server) = socket_pair();
-        let (mut second, second_server) = socket_pair();
-        for client in [&mut first, &mut second] {
-            client
-                .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-                .unwrap();
-        }
-        // One worker serves both.
-        let worker = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    connection(first_server, &handler);
-                    connection(second_server, &handler);
-                    std::thread::current().id()
-                })
-                .join()
-                .unwrap()
-        });
-        let threads = handler.0.lock().unwrap();
-        assert_eq!(threads.len(), 2);
-        assert_ne!(threads[0], worker);
-        assert_ne!(threads[1], worker);
-        assert_ne!(threads[0], threads[1]);
     }
 
     #[test]

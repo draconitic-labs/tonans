@@ -273,12 +273,18 @@ impl Router {
             ("GET", ["api", "templates", "interval-csv"]) => api::csv_template(),
             ("GET", ["api", "projects", name, "profile"]) => api::profile(state, name),
             ("GET", ["api", "projects", name, "revision"]) => api::project_revision(state, name),
-            ("POST", ["api", "projects", name, "import"]) => api::import(state, name, request),
-            ("POST", ["api", "projects", name, "run"]) => api::run(state, name, request),
-            ("POST", ["api", "projects", name, "sensitivity"]) => {
-                api::sensitivity(state, name, request)
+            ("POST", ["api", "projects", name, "import"]) => {
+                http::on_its_own_thread(|| api::import(state, name, request))
             }
-            ("POST", ["api", "projects", name, "export"]) => api::export(state, name, request),
+            ("POST", ["api", "projects", name, "run"]) => {
+                http::on_its_own_thread(|| api::run(state, name, request))
+            }
+            ("POST", ["api", "projects", name, "sensitivity"]) => {
+                http::on_its_own_thread(|| api::sensitivity(state, name, request))
+            }
+            ("POST", ["api", "projects", name, "export"]) => {
+                http::on_its_own_thread(|| api::export(state, name, request))
+            }
             ("GET", ["api", "projects", name, "exports", key, artifact]) => {
                 api::download(state, name, key, artifact)
             }
