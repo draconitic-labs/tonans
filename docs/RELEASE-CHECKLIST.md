@@ -26,27 +26,57 @@ $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 
 ## Pending before a binary release
 
-### Browser walkthrough
+### Walkthrough
 
-Launch the final staged executable and drive the actual DOM workflow:
+Launch the final build in its native window and drive the actual interface with real
+input, never a browser:
 
 ```text
-import -> configure -> run -> compare -> sensitivity -> export -> reopen
+import -> configure -> run -> compare -> sensitivity -> export -> quit -> relaunch -> reopen
 ```
 
-Automated tests and the packaged-binary smoke exercise the HTTP boundary and model
-path, but they do not drive the browser DOM. Confirm visible units, warnings,
-source-flow metrics, assumption text, sensitivity results, export links, and project
-reopening. Record the tested package digest when this passes.
+Automated tests and the packaged-binary smoke exercise the HTTP boundary and model path,
+but they do not drive the interface. Confirm visible units, warnings, source-flow metrics,
+assumption text, sensitivity results, saved exports, and project reopening. Record the
+tested package digest when this passes.
 
-Passed 2026-11-03 against a Linux release build of this source, not the Windows package,
-using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through the
-page: all eight columns mapped in the import form, 8,760 intervals imported, three scenarios
-added and saved, four scenarios compared, a 12-cell sensitivity grid run, and a bundle
-exported whose files all pass `SHA256SUMS.txt`, with no script in `report.html`. After
-stopping the server from the UI and restarting, the reopened project reproduced model input
-hash `e20536dfda6e` and project hash `5f98a2f9428a`. No package digest applies to this source
-build. Rerun the walkthrough against the staged Windows package and record its digest before
+Passed 2026-11-04 on Linux in the Tauri window (WebKitGTK 2.54), against source revision
+`5838632` and a release binary with SHA-256
+`63a1f3a26d4c294f...`. It was run on a virtual X display, with no session bus
+and no window manager, and driven by an AI agent using `xdotool` keystrokes and clicks and
+checking a screenshot at each step, at 1600x950 and 1280x720, in light and dark.
+
+- **Import:** `samples/riverside-works-2024.csv` through the native file picker. The
+  explicit suggestion mapped 8 of 8 columns, flagged two prices whose currency the file does
+  not state, and held the import until the review box was ticked. A wrong interval was
+  refused on screen, and the same file imported once corrected, without choosing it again.
+  The sample-data path and the saved CSV template were also exercised.
+- **Configure:** four candidates added from the templates, with a tariff preset, undo, redo,
+  duplicate, remove, and keyboard shortcuts. A blank number was refused rather than read as 0.
+- **Run and compare:** five scenarios, 8,760 intervals. The bundled demo reproduced the
+  hashes of a build of `main`: model input `4e25a00008c5ccdc...`, results `65b99cea6ef175ec...`.
+- **Sensitivity:** a 9-cell grid with installed cost moving at 550 USD per kWh. The best
+  cell was marked as the best of those tested, and was added as a scenario and undone.
+- **Export:** a bundle of 11 files. One file was saved through the native save dialog and
+  the whole bundle through the native folder dialog. All 10 listed files passed
+  `sha256sum -c` on `SHA256SUMS.txt`, and `report.html` holds no script.
+- **Quit and reopen:** Quit, and a window-close message, both asked first over unsaved edits.
+  After quitting and relaunching, the reopened project gave identical hashes: results
+  `662cb60e61f6fb11...`, model input `e6895dfbc4f5574e...`, project `2eac7fd648e9d488...`.
+
+Not covered by this record:
+
+- **Windows was not walked through.** No Windows build has been run, and no package digest
+  applies to this source build.
+- Wayland and a real compositor were not exercised: the frames went to a virtual display, and
+  that hides renderer problems. The WebKit settings for the NVIDIA driver are unit-tested only.
+- With no session bus, Show in file manager took its fallback of opening the folder, so the
+  desktop's file-manager service was not exercised. Links reached a stand-in for `xdg-open`,
+  so no real handler ran.
+- `scripts/install-desktop.sh` has not been run. Its file-recognition functions were
+  exercised against a scratch home folder.
+
+Rerun the walkthrough against the staged Windows package and record its digest before
 publishing a binary.
 
 ### Final integrated gate rerun
@@ -185,7 +215,7 @@ integrity evidence, not publisher authentication.
 ## Final release sequence
 
 1. Verify the archive digest and extract it.
-2. Complete the browser walkthrough above using the exact staged package.
+2. Complete the walkthrough above using the exact staged package.
 3. Confirm the boundary text, assumptions, units, warnings, and exports are readable.
 4. Record the package digest and outcome.
 5. Keep the binary unpublished until every final integrated gate and the walkthrough

@@ -22,7 +22,7 @@ battery-state reference replay pinned to SSC commit
 or a claim of SAM/SSC parity.
 
 The walkthrough (import -> configure -> run -> compare -> sensitivity -> export ->
-quit -> relaunch -> reopen) has been done in the native window on Linux with real
+quit -> relaunch -> reopen) passed on 2026-11-04 in the native window on Linux with real
 input. It has not been done on Windows. `docs/RELEASE-CHECKLIST.md` records the result
 and what remains before a Windows binary is published.
 

@@ -94,7 +94,7 @@ addition:
 
 ## Embedded and exported UI
 
-Browser assets are compiled into the executable. They reference no CDN, remote font,
+Interface assets are compiled into the executable. They reference no CDN, remote font,
 analytics service, advertisement, or remote origin. Build tests reject unsafe DOM
 sinks such as `innerHTML`, `eval`, `new Function`, `document.write`, and
 `insertAdjacentHTML`; untrusted labels are written with `textContent`.

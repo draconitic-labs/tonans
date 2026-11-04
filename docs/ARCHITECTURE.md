@@ -11,7 +11,7 @@ tonans-desktop  The application: a Tauri window showing that server's UI, in-pro
 
 The split is a capability boundary. `tonans-core` owns every numeric dependency and
 has no ambient clock, randomness, or network access. `tonans-app` owns the socket,
-embedded browser assets, launch-time randomness, and the one injected wall-clock
+embedded interface assets, launch-time randomness, and the one injected wall-clock
 value used for artifact metadata. `tonans-desktop` adds the window and the few things
 only a native process can do. It reaches the model only through `tonans-app`.
 
