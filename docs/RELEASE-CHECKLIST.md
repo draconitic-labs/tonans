@@ -1,10 +1,9 @@
 # Release checklist - Tonans release candidate
 
-**Status: no binary release, not for sale, and reserved for operator testing.**
+**Status: no binary release and not for sale.**
 
 The numeric public-reference gate and final integrated automated gates are closed for
-the exact operator-test artifact below. The operator's real-browser DOM walkthrough
-remains pending. Evidence belongs to the exact artifact being considered for release;
+the exact release-candidate artifact below. Evidence belongs to the exact artifact being considered for release;
 an earlier green run does not bless a later binary.
 
 Verified 2026-07-13:
@@ -17,7 +16,7 @@ Verified 2026-07-13:
 - CycloneDX 1.5 JSON Schema validation passed with the official SPDX and JSF schemas;
 - Grok 4.5 maximum reasoning and an independent fresh-context Codex review both
   returned GO for the exact reviewed source and archive digest; and
-- Authenticode status is intentionally `NotSigned` for this operator test.
+- Authenticode status is intentionally `NotSigned` for this release candidate.
 
 Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 
@@ -27,19 +26,28 @@ $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 
 ## Pending before publication
 
-### Operator browser walkthrough
+### Browser walkthrough
 
-The operator must launch the final staged executable and click through the actual
-DOM workflow:
+Launch the final staged executable and drive the actual DOM workflow:
 
 ```text
 import -> configure -> run -> compare -> sensitivity -> export -> reopen
 ```
 
 Automated tests and the packaged-binary smoke exercise the HTTP boundary and model
-path, but they do not drive the browser DOM. The operator should confirm visible
-units, warnings, source-flow metrics, assumption text, sensitivity results, export
-links, and project reopening. Record the tested package digest when this passes.
+path, but they do not drive the browser DOM. Confirm visible units, warnings,
+source-flow metrics, assumption text, sensitivity results, export links, and project
+reopening. Record the tested package digest when this passes.
+
+Passed 2026-11-03 against a Linux release build of this source, not the Windows package,
+using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through
+the page: all eight columns mapped in the import form, 8,760 intervals imported, a battery scenario added and saved, baseline and battery
+scenarios compared, a 12-cell sensitivity grid run, and a bundle exported whose seven
+files all pass `SHA256SUMS.txt`, with no script in `report.html`. After stopping the
+server from the UI and restarting, the reopened project reproduced model input hash
+`057ae97fc9ff` and project hash `18b39fd1f6f4` with identical results. The walkthrough
+found and fixed one defect: the scenario count stayed stale after saving. Rerun it against
+the staged Windows package before publishing a binary.
 
 ### Final integrated gate rerun
 
@@ -177,13 +185,13 @@ sale, finalize the legal terms and refund window, exercise purchase/activation/
 recovery/refund/dispute behavior in test mode, and obtain explicit publication
 approval.
 
-## Final operator sequence
+## Final release sequence
 
 1. Verify the archive digest and extract it.
 2. Complete the browser walkthrough above using the exact staged package.
 3. Confirm the boundary text, assumptions, units, warnings, and exports are readable.
 4. Record the package digest and outcome.
-5. Keep Tonans unpublished until every final integrated gate and the manual test are
-   closed.
+5. Keep the binary unpublished until every final integrated gate and the walkthrough
+   are closed.
 
 Support: `support@flintglade.com`
