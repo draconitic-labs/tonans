@@ -1,6 +1,6 @@
 # Release checklist - Tonans release candidate
 
-**Status: no binary release and not for sale.**
+**Status: no binary release yet.**
 
 The numeric public-reference gate and final integrated automated gates are closed for
 the exact release-candidate artifact below. Evidence belongs to the exact artifact being considered for release;
@@ -171,22 +171,16 @@ A reviewer who did not implement the final slice must inspect at least:
 - HTTP head/body ordering, deadlines, queue bounds, guards, and response writing;
 - entitlement checks at use time;
 - package contents, PE imports, SBOM/notices/checksums, and sanitized smoke evidence;
-- public claims for parity, determinism, pricing, refund, and licensing scope.
+- public claims for parity and determinism.
 
 Record findings and regressions. A review of code before a subsequent repair is not
 the final review.
 
-## Signing and sales status
+## Signing status
 
 The release candidate is explicitly unsigned. Windows SmartScreen may warn that the
 publisher cannot be confirmed. The archive sidecar and internal checksums provide
 integrity evidence, not publisher authentication.
-
-Sales are disabled. Do not create a Stripe product, enable checkout, embed a live
-licensing origin, or claim a refund policy for this candidate. Before any future
-sale, finalize the legal terms and refund window, exercise purchase/activation/
-recovery/refund/dispute behavior in test mode, and obtain explicit publication
-approval.
 
 ## Final release sequence
 
