@@ -2224,10 +2224,12 @@ function addScenario() {
         ]));
       }
       if (fields.length) pane.appendChild(el('div', { class: 'grid' }, fields));
-      pane.appendChild(el('p', { class: 'tiny muted', text:
-        'Tariff, economics, degradation, and outages are copied from the baseline, so the comparison stays like ' +
-        'for like. That includes any replacement cost, which does not move with the size here. Battery defaults are 95 % efficiency each way, a 10 to 100 % window, 1.5 % self-discharge a ' +
-        'month, and a 50 % starting charge. All of it is a starting point, not a recommendation: review it on the scenario.' }));
+      pane.appendChild(el('p', { class: 'tiny muted', text: current.noCost
+        ? 'Every assumption is copied from the baseline. It is a starting point, not a recommendation.'
+        : 'Tariff, economics, degradation, and outages are copied from the baseline, so the comparison stays like ' +
+          'for like. That includes any replacement cost, which does not move with the size here. Battery defaults ' +
+          'are 95 % efficiency each way, a 10 to 100 % window, 1.5 % self-discharge a month, and a 50 % starting ' +
+          'charge. All of it is a starting point, not a recommendation: review it on the scenario.' }));
       pane.appendChild(failure);
     };
 
