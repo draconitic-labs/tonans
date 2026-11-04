@@ -41,28 +41,36 @@ assumption text, sensitivity results, saved exports, and project reopening. Reco
 tested package digest when this passes.
 
 Passed 2026-11-04 on Linux in the Tauri window (WebKitGTK 2.54), against source revision
-`5838632` and a release binary with SHA-256
-`63a1f3a26d4c294f...`. It was run on a virtual X display, with no session bus
+`a1cd974` and a release binary with SHA-256
+`94934cbdd6b310c6...`. It was run on a virtual X display, with no session bus
 and no window manager, and driven by an AI agent using `xdotool` keystrokes and clicks and
 checking a screenshot at each step, at 1600x950 and 1280x720, in light and dark.
 
 - **Import:** `samples/riverside-works-2024.csv` through the native file picker. The
   explicit suggestion mapped 8 of 8 columns, flagged two prices whose currency the file does
-  not state, and held the import until the review box was ticked. A wrong interval was
-  refused on screen, and the same file imported once corrected, without choosing it again.
-  The sample-data path and the saved CSV template were also exercised.
-- **Configure:** four candidates added from the templates, with a tariff preset, undo, redo,
-  duplicate, remove, and keyboard shortcuts. A blank number was refused rather than read as 0.
-- **Run and compare:** five scenarios, 8,760 intervals. The bundled demo reproduced the
-  hashes of a build of `main`: model input `4e25a00008c5ccdc...`, results `65b99cea6ef175ec...`.
-- **Sensitivity:** a 9-cell grid with installed cost moving at 550 USD per kWh. The best
-  cell was marked as the best of those tested, and was added as a scenario and undone.
+  not state, and held the import until the review box was ticked. Importing with nothing
+  mapped was refused. A wrong interval was refused on screen, and the same file imported
+  once corrected, without choosing it again. The sample-data path marked the project as
+  synthetic on screen and in the warning ledger, and the CSV template was saved through the
+  native dialog.
+- **Configure:** scenarios added from the battery-sizes, peak-shaving, and backup-first
+  templates; imported prices applied to every scenario; a tariff preset copied to every
+  scenario; an outage window edited through the date popup, labelled, and copied to every
+  scenario; duplicate, remove, undo, and redo. A blank number was refused rather than read
+  as 0, and an empty outage window was refused with the edits kept.
+- **Run and compare:** five scenarios, 8,760 intervals. The bundled demo, run through
+  `tonans run`, reproduced the hashes of a build of `main`: model input `4e25a00008c5ccdc...`,
+  results `65b99cea6ef175ec...`.
+- **Sensitivity:** a 9-cell grid with installed cost moving at 550 USD per kWh, with the best
+  cell marked as the best of those tested. An unreadable axis value was refused, and a cell
+  was added as a scenario and undone.
 - **Export:** a bundle of 11 files. One file was saved through the native save dialog and
   the whole bundle through the native folder dialog. All 10 listed files passed
   `sha256sum -c` on `SHA256SUMS.txt`, and `report.html` holds no script.
-- **Quit and reopen:** Quit, and a window-close message, both asked first over unsaved edits.
-  After quitting and relaunching, the reopened project gave identical hashes: results
-  `662cb60e61f6fb11...`, model input `e6895dfbc4f5574e...`, project `2eac7fd648e9d488...`.
+- **Quit and reopen:** Quit, and a window-close message, both asked first over unsaved edits,
+  and choosing to quit discarded them. After quitting and relaunching, the reopened project
+  gave identical hashes: results `662cb60e61f6fb11...`, model input `e6895dfbc4f5574e...`,
+  project `765c056b5c94581e...`.
 
 Not covered by this record:
 
