@@ -4,7 +4,10 @@ Tonans is Flintglade's local-first microgrid scenario workbench. It compares
 transparent battery, tariff, renewable-generation, and outage-planning scenarios
 without controlling equipment or presenting planning estimates as certified designs.
 
-## Status: release candidate for operator testing. Not published.
+## Status: release candidate. No binary release yet.
+
+The source is available for inspection and evaluation under [LICENSE.md](LICENSE.md).
+Tonans is not open-source software.
 
 The code gates have passed during the current hardening cycle: formatting, strict
 Clippy, the workspace test suite, dependency audit, production build, and package
