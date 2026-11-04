@@ -6,8 +6,7 @@ without controlling equipment or presenting planning estimates as certified desi
 
 ## Status: release candidate. No binary release yet.
 
-The source is available for inspection and evaluation under [LICENSE.md](LICENSE.md).
-Tonans is not open-source software.
+Tonans is open-source software under the [Apache License 2.0](LICENSE).
 
 The code gates have passed during the current hardening cycle: formatting, strict
 Clippy, the workspace test suite, dependency audit, production build, and package
@@ -26,10 +25,6 @@ The browser walkthrough of the real DOM (import -> configure -> run -> compare -
 sensitivity -> export -> reopen) passed on 2026-11-03 against a Linux build of this
 source. `docs/RELEASE-CHECKLIST.md` records the result and what remains before a
 Windows binary is published.
-
-Sales remain disabled. There is no purchase flow, licence key, activation server,
-Stripe catalog entry, or payment integration in the executable. Every current build
-runs in the Evaluation tier.
 
 ## What it is
 
@@ -55,10 +50,16 @@ under the workspace the user selects.
 | `docs/SECURITY.md` | Threat model and defenses in request and filesystem order. |
 | `docs/PRIVACY.md` | What is collected, where data lives, and how to remove it. |
 | `docs/RELEASE-CHECKLIST.md` | Reproducible release gates and their recorded results. |
-| `TERMS.md` | Proposed licence tiers and pricing; sales are disabled. |
-| `LICENSE.md` | Proprietary software licence; third-party components remain under their own licences. |
+| `LICENSE` | Apache License 2.0; third-party components remain under their own licences. |
 
 ## Building
+
+On Linux, with the pinned toolchain:
+
+```sh
+cargo test --workspace --all-targets --locked
+cargo run --release --locked -p tonans-app
+```
 
 Windows x64, with the llvm-mingw toolchain:
 
@@ -77,7 +78,7 @@ cargo +stable-x86_64-pc-windows-gnullvm clippy --workspace --all-targets --locke
 ```
 
 These scripts build and verify a local release candidate. They do not publish,
-upload, install, enable sales, or create a shortcut. A binary is published only after
+upload, install, or create a shortcut. A binary is published only after
 the integrated gates and browser walkthrough pass against that exact package.
 
 Support: `support@flintglade.com`.
