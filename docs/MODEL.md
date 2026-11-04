@@ -172,6 +172,21 @@ Tariff support includes:
 - local-calendar-month demand charges by labeled demand period; and
 - fixed monthly charges.
 
+Demand and fixed charges are billed once for every calendar month the data touches at the site's
+time zone, in full, however little of that month the data covers. A year of data that starts mid
+month, or a year stamped in UTC for a site elsewhere, touches 13. Those 13 full charges stay in
+the grid cost, savings, and net present value, because scaling them would be a guess about a bill
+Tonans has not seen. In one test year of 8,760 hours, starting on the first of the month gave 71,600
+USD of annual grid cost, starting on July 15 gave 72,700 USD, and five hours of December cost a full
+month's charges for a year stamped in UTC at a New York site. So any count other than 12 raises the
+caution `cost.billed_months_not_twelve`, which states the count. It appears in Results, in the report's
+warning ledger, and in `provenance.json` and `summary.json`.
+
+A warning is prose, so it changes no number and neither `model_input_hash` nor `results_hash`. A
+study's own identity hash does cover its warnings, so a study over data touching other than 12 months
+has a different identity from a build without this warning. A year touching exactly 12 raises nothing
+and moves nothing.
+
 ## Economics
 
 Tonans reports CAPEX, annual OPEX, replacement assumptions, simple and discounted

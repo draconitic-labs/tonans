@@ -168,6 +168,24 @@ pub fn evaluate(
         ));
     }
 
+    // Charged per calendar month touched, however little of the month the data covers, and
+    // not scaled to a twelfth of anything. The numbers stand; this says what is in them.
+    if cost.billed_month_count != 12 {
+        let months = cost.billed_month_count;
+        ledger.push(Warning::caution(
+            "cost.billed_months_not_twelve",
+            format!(
+                "the data touches {months} calendar month{plural} at the site's time zone, where a \
+                 whole year touches 12. {months} month{plural} {were} billed, each with a full \
+                 demand charge and a full fixed charge however little of the month the data \
+                 covers, and the grid cost, savings, and net present value include them. Data \
+                 that starts on the first of a month, in site time, does not do this.",
+                plural = if months == 1 { "" } else { "s" },
+                were = if months == 1 { "was" } else { "were" },
+            ),
+        ));
+    }
+
     let baseline_annual_grid_cost_usd =
         baseline_cost.total_grid_cost_usd * annualization_multiplier;
     let scenario_annual_grid_cost_usd = cost.total_grid_cost_usd * annualization_multiplier;
@@ -343,7 +361,8 @@ pub fn evaluate(
         total = annual_fade_pct_per_year,
         scaling = match degradation.benefit_scaling {
             BenefitScaling::ProportionalToUsableCapacity => "scaled by remaining usable capacity",
-            BenefitScaling::Constant => "held constant, i.e. fade is assumed to be handled outside the model",
+            BenefitScaling::Constant =>
+                "held constant, i.e. fade is assumed to be handled outside the model",
         }
     );
 
