@@ -92,5 +92,5 @@ candidate.
   signed-or-explicitly-unsigned status, SBOM, notices, checksums, binary/package scan,
   and fresh-context review all recorded against the final integrated artifact.
 - The Windows release candidate is locally launchable from a desktop shortcut but
-  remains unpublished pending the user's manual test and, preferably, independent
-  review by a qualified energy analyst.
+  remains unpublished until the final integrated gates pass. Independent review by a
+  qualified energy analyst is recommended.
