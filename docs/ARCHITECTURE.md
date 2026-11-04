@@ -28,7 +28,6 @@ value used for artifact metadata.
 | `canonical` | Sorted-key canonical JSON and SHA-256 model/result identities. |
 | `paths` / `store` | Name validation, confinement, reparse-point refusal, and atomic writes. |
 | `limits` | The compiled safety envelope, in one source of truth. |
-| `licensing` | Narrow local entitlement seam; no key server or network client. |
 | `units` | Serialized numeric fields mapped to explicit units. |
 
 ### Determinism contract
@@ -52,7 +51,7 @@ changes whenever an unchanged input could produce a different number.
 | `api` | Control routes that accept project names, never arbitrary paths. |
 | `assets` | UI bytes embedded in the executable and scanned for unsafe DOM or remote-origin use. |
 | `token` | Per-launch 256-bit OS-CSPRNG token, never persisted, constant-time comparison. |
-| `state` | Workspace, entitlements, staged upload slot, and request-rate window. |
+| `state` | Workspace, staged upload slot, and request-rate window. |
 | `demo` | Bundled demonstration project installed through the real importer. |
 | `clock` | The single audited wall-clock read, injected into core operations. |
 
