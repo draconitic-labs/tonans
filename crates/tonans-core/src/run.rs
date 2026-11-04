@@ -22,7 +22,7 @@ use crate::engine::{
     self, CostSummary, EnergySummary, EngineOptions, IntervalRow, OutageResult, ResolvedInput,
 };
 use crate::error::{Error, Result, Warning, WarningLedger};
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 use crate::schema::{Dataset, DemandPeriods, Project, Scenario, SeriesKind};
 use crate::version::{
     APP_VERSION, MODEL_EXCLUSIONS, MODEL_VERSION, PLANNING_DISCLAIMER, SCHEMA_VERSION,
@@ -273,11 +273,32 @@ fn model_scenarios(scenarios: &[Scenario]) -> Result<Vec<serde_json::Value>> {
     Ok(values)
 }
 
+/// Refuse a run too large to hold in memory, before any of it is simulated.
+fn check_run_size(scenarios: usize, intervals: usize) -> Result<()> {
+    let rows = scenarios.saturating_mul(intervals);
+    if rows > limits::MAX_RUN_ROWS {
+        return Err(Error::limit(
+            "limit.run_rows",
+            limits::MAX_RUN_ROWS as u64,
+            rows as u64,
+            format!(
+                "{scenarios} scenarios of {intervals} intervals is {rows} rows; one run holds up to \
+                 {}. Remove scenarios or use coarser data.",
+                limits::MAX_RUN_ROWS
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Run every scenario in `project`.
 ///
 /// `now_utc` is injected; this crate has no clock.
 pub fn run_project(project: &Project, now_utc: DateTime<Utc>) -> Result<RunResult> {
     let grid = project.validate_runnable()?;
+    if let Some(dataset) = &project.dataset {
+        check_run_size(project.scenarios.len(), dataset.interval_count)?;
+    }
 
     let baseline_spec = project.baseline().ok_or_else(|| {
         Error::validation(
@@ -396,4 +417,17 @@ pub fn run_project(project: &Project, now_utc: DateTime<Utc>) -> Result<RunResul
         disclaimer: PLANNING_DISCLAIMER.to_string(),
         model_exclusions: MODEL_EXCLUSIONS.iter().map(|s| (*s).to_string()).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_is_bounded_by_scenarios_times_intervals() {
+        assert!(check_run_size(limits::MAX_SCENARIOS, 8_760).is_ok());
+        assert!(check_run_size(4, limits::MAX_INTERVALS).is_ok());
+        let error = check_run_size(limits::MAX_SCENARIOS, limits::MAX_INTERVALS).unwrap_err();
+        assert_eq!(error.code(), "limit.run_rows");
+    }
 }
