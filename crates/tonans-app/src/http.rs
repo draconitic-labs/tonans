@@ -134,12 +134,25 @@ pub trait Handler: Send + Sync + 'static {
         None
     }
 
-    /// Answer a request. A panic is contained to its worker and drops only that
-    /// connection, so one bad request cannot take the server down.
+    /// Answer a request. A panic here costs the client a 500 and nothing else: the
+    /// worker carries on, and one bad request cannot take the server down.
     fn handle(&self, request: &Request) -> Response;
 
     /// The largest body this path may carry, checked before it is read.
     fn body_limit(&self, method: &str, path: &str) -> usize;
+
+    /// What a client gets when one of the methods above panics.
+    fn panic_response(&self) -> Response {
+        internal_error()
+    }
+}
+
+/// The body of the 500 a panicking handler's client receives.
+pub fn internal_error() -> Response {
+    Response::json(
+        500,
+        r#"{"code":"http.internal","message":"Tonans hit an internal error handling this request. Nothing was changed by it. Please report it."}"#,
+    )
 }
 
 /// Serve until `stop` is set.
@@ -166,15 +179,7 @@ pub fn serve<H: Handler>(
                 guard.recv()
             };
             let Ok(stream) = stream else { return };
-
-            // A panic in one request must not poison the pool or kill the process.
-            // The client gets a 500 and the worker carries on.
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                connection(stream, handler.as_ref());
-            }));
-            if outcome.is_err() {
-                eprintln!("tonans: a request handler panicked; the connection was dropped");
-            }
+            connection(stream, handler.as_ref());
         }));
     }
 
@@ -222,12 +227,30 @@ fn connection<H: Handler>(stream: TcpStream, handler: &H) {
     // One request per connection, then close. Keep-alive would save a few
     // milliseconds on a loopback socket and would double the state this module has
     // to reason about. It is not a trade worth making here.
-    let response = match read_request_head(&mut reader) {
+    //
+    // A panic stops here, while `writer` is still ours, so the client gets an answer. The
+    // default panic hook has already printed the message and location to stderr.
+    let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        answer(&mut reader, handler)
+    }))
+    .unwrap_or_else(|_| {
+        eprintln!("tonans: a request handler panicked; the client was answered with a 500");
+        handler.panic_response()
+    });
+
+    let _ = write_response(&mut writer, &response);
+    let _ = writer.flush();
+    let _ = writer.shutdown(Shutdown::Both);
+}
+
+/// Read one request and produce its response.
+fn answer<H: Handler>(reader: &mut BufReader<DeadlineStream>, handler: &H) -> Response {
+    match read_request_head(reader) {
         Ok(mut request) => match handler.preflight(&request) {
             Some(refusal) => refusal,
             None => {
                 let limit = handler.body_limit(&request.method, &request.path);
-                match read_body(&mut reader, &request.headers, limit) {
+                match read_body(reader, &request.headers, limit) {
                     Ok(body) => {
                         request.body = body;
                         handler.handle(&request)
@@ -237,11 +260,7 @@ fn connection<H: Handler>(stream: TcpStream, handler: &H) {
             }
         },
         Err(status) => bad_request(status),
-    };
-
-    let _ = write_response(&mut writer, &response);
-    let _ = writer.flush();
-    let _ = writer.shutdown(Shutdown::Both);
+    }
 }
 
 fn bad_request(status: u16) -> Response {
@@ -389,10 +408,12 @@ fn write_response(writer: &mut impl Write, response: &Response) -> std::io::Resu
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         411 => "Length Required",
         413 => "Payload Too Large",
         414 => "URI Too Long",
         422 => "Unprocessable Content",
+        428 => "Precondition Required",
         429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
@@ -422,8 +443,8 @@ fn write_response(writer: &mut impl Write, response: &Response) -> std::io::Resu
     Ok(())
 }
 
-/// Percent-decode a path segment.
-fn percent_decode(input: &str) -> Result<String, u16> {
+/// Percent-decode a path segment or an encoded header value.
+pub fn percent_decode(input: &str) -> Result<String, u16> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -473,6 +494,122 @@ mod tests {
 
         fn body_limit(&self, _method: &str, _path: &str) -> usize {
             usize::MAX
+        }
+    }
+
+    /// Panics on `/boom`, in whichever method `stage` names, and answers anything else.
+    struct PanickingHandler {
+        stage: &'static str,
+    }
+
+    impl PanickingHandler {
+        fn maybe_panic(&self, stage: &str, path: &str) {
+            assert!(
+                !(stage == self.stage && path == "/boom"),
+                "a deliberate panic in {stage}"
+            );
+        }
+    }
+
+    impl Handler for PanickingHandler {
+        fn preflight(&self, request: &Request) -> Option<Response> {
+            self.maybe_panic("preflight", &request.path);
+            None
+        }
+
+        fn handle(&self, request: &Request) -> Response {
+            self.maybe_panic("handle", &request.path);
+            Response::new(200, "text/plain", "still here")
+        }
+
+        fn body_limit(&self, _method: &str, path: &str) -> usize {
+            self.maybe_panic("body_limit", path);
+            1024
+        }
+
+        fn panic_response(&self) -> Response {
+            internal_error().with_header("x-from-panic-response", "yes")
+        }
+    }
+
+    fn get(address: std::net::SocketAddr, path: &str) -> String {
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        write!(client, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    #[test]
+    fn a_handler_panic_sends_the_promised_500() {
+        for stage in ["preflight", "handle", "body_limit"] {
+            let (mut client, server) = socket_pair();
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let worker = std::thread::spawn(move || {
+                connection(server, &PanickingHandler { stage });
+            });
+            client
+                .write_all(b"GET /boom HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            worker.join().expect("the panic must not escape the worker");
+
+            assert!(
+                response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+                "{stage}: {response}"
+            );
+            assert!(response.contains(r#""code":"http.internal""#), "{response}");
+            // The handler's own panic response, which is how the router secures it.
+            assert!(
+                response.contains("x-from-panic-response: yes"),
+                "{response}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pool_keeps_serving_after_more_panics_than_it_has_workers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let serving = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                serve(
+                    &listener,
+                    Arc::new(PanickingHandler { stage: "handle" }),
+                    &stop,
+                )
+            })
+        };
+
+        for _ in 0..(WORKERS * 2) {
+            assert!(get(address, "/boom").starts_with("HTTP/1.1 500"));
+        }
+        assert!(get(address, "/fine").ends_with("still here"));
+
+        stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(address);
+        serving.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn the_release_profile_does_not_abort_on_panic() {
+        // Under `panic = "abort"` every catch above is dead code in the shipped binary,
+        // and this test, which runs in the test profile, would still pass without it.
+        let manifest = include_str!("../../../Cargo.toml");
+        for line in manifest.lines() {
+            let line = line.split('#').next().unwrap_or_default();
+            assert!(
+                !(line.contains("panic") && line.contains("abort")),
+                "a build profile sets panic = abort"
+            );
         }
     }
 

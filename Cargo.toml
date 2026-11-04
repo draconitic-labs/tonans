@@ -41,5 +41,7 @@ dbg_macro = "deny"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# `panic` stays at its default of "unwind" on purpose. `http::connection` catches a
+# handler's panic and answers 500, and that catch does nothing under "abort". A test in
+# `tonans-app/src/http.rs` fails if this line comes back.
 strip = "debuginfo"

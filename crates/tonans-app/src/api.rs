@@ -286,11 +286,10 @@ pub struct SuggestBody {
 pub fn suggest_mapping(state: &AppState, request: &Request) -> Response {
     respond((|| -> Result<MappingSuggestion> {
         let body: SuggestBody = parse_body(request)?;
-        state.with_upload(&body.upload_id, |staged| {
-            Ok(csvimport::suggest_mapping(&csvimport::preview(
-                &staged.bytes,
-            )?))
-        })
+        let staged = state.staged_upload(&body.upload_id)?;
+        Ok(csvimport::suggest_mapping(&csvimport::preview(
+            &staged.bytes,
+        )?))
     })())
 }
 
@@ -320,30 +319,28 @@ pub fn import(state: &AppState, name: &str, request: &Request) -> Response {
         // Read without consuming: a refused import leaves the file staged, so the user
         // can fix the mapping the error names and try again without choosing it again.
         let mut import_request = body.request;
-        let report = state.with_upload(&body.upload_id, |staged| {
-            // The name the file arrived under wins over anything the body claims, so a
-            // client cannot launder a hostile name through the import request.
-            import_request.filename.clone_from(&staged.filename);
-            let mut report = csvimport::import(&staged.bytes, &import_request, now)?;
+        let staged = state.staged_upload(&body.upload_id)?;
+        // The name the file arrived under wins over anything the body claims, so a
+        // client cannot launder a hostile name through the import request.
+        import_request.filename.clone_from(&staged.filename);
+        let mut report = csvimport::import(&staged.bytes, &import_request, now)?;
 
-            // The sample is invented. Say so where it follows the data into every report.
-            if staged.synthetic {
-                report.dataset.import_warnings.push(Warning::caution(
-                    "data.synthetic_sample",
-                    "this data is the bundled synthetic sample, not a real site's meter export. \
-                     Every number derived from it is an illustration of the model, not a finding \
-                     about a building.",
-                ));
-            }
-            Ok(report)
-        })?;
+        // The sample is invented. Say so where it follows the data into every report.
+        if staged.synthetic {
+            report.dataset.import_warnings.push(Warning::caution(
+                "data.synthetic_sample",
+                "this data is the bundled synthetic sample, not a real site's meter export. \
+                 Every number derived from it is an illustration of the model, not a finding \
+                 about a building.",
+            ));
+        }
 
         project.dataset = Some(report.dataset.clone());
         project.site.timezone = import_request.timezone.clone();
         project.modified_utc = now;
         project.validate()?;
         state.workspace.save_project(&project)?;
-        state.take_upload(&body.upload_id)?;
+        state.discard_upload(&body.upload_id);
 
         Ok(serde_json::json!({
             "project": project,
@@ -853,7 +850,8 @@ mod tests {
         let body = serde_json::json!({ "upload_id": id });
         assert_eq!(suggest_mapping(&state, &json_request(&body)).status, 200);
         // Asking for a suggestion must not use the file up.
-        assert!(state.take_upload(&id).is_ok());
+        assert!(state.staged_upload(&id).is_ok());
+        state.discard_upload(&id);
 
         let stale = suggest_mapping(&state, &json_request(&body));
         assert_ne!(stale.status, 200);

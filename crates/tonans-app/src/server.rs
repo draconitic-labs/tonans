@@ -152,6 +152,10 @@ impl Handler for Router {
     fn handle(&self, request: &Request) -> Response {
         Self::secure(self.route(request))
     }
+
+    fn panic_response(&self) -> Response {
+        Self::secure(http::internal_error())
+    }
 }
 
 impl Router {
@@ -380,6 +384,26 @@ mod tests {
             }
         }
         assert!(limited, "an authorized runaway loop was never rate limited");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_panic_response_carries_the_security_headers() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-panic-regression-{}-{}",
+            std::process::id(),
+            token::mint().unwrap()
+        ));
+        let server = Server::bind(Workspace::open(&root).unwrap(), 0).unwrap();
+        let router = Router {
+            state: server.state,
+        };
+        let response = router.panic_response();
+        assert_eq!(response.status, 500);
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-security-policy" && value == CSP));
         std::fs::remove_dir_all(root).unwrap();
     }
 
