@@ -40,8 +40,7 @@ $OutDir = Join-Path $PSScriptRoot 'out'
 $Payload = @(
     'Tonans.exe'
     'README.md'
-    'LICENSE.md'
-    'TERMS.md'
+    'LICENSE'
     'NOTICES.md'
     'PRIVACY.md'
     'SECURITY.md'
@@ -199,8 +198,7 @@ try {
     # 4. No test secrets, live origins, or payment integration
     # -----------------------------------------------------------------------
     Check 'no payment integration or test secret reached the artifact' {
-        # Sales are disabled in this build by design. A Stripe key or endpoint in a
-        # shipped artifact would mean that stopped being true.
+        # Tonans has no payment integration. A Stripe key or endpoint here would be a mistake.
         $forbidden = @(
             'stripe', 'sk_live_', 'sk_test_', 'pk_live_', 'pk_test_',
             'BEGIN PRIVATE KEY', 'BEGIN RSA PRIVATE KEY', 'AKIA', 'xoxb-'
@@ -365,8 +363,8 @@ try {
         $rootLicenses = @($root.licenses)
         if ($rootLicenses.Count -ne 1 -or
             -not ($rootLicenses[0].PSObject.Properties.Name -contains 'expression') -or
-            $rootLicenses[0].expression -ne 'LicenseRef-Flintglade-Tonans-Commercial') {
-            $problems += 'root license is not the commercial LicenseRef expression'
+            $rootLicenses[0].expression -ne 'Apache-2.0') {
+            $problems += 'root license is not Apache-2.0'
         }
 
         if (@($bom.components).Count -lt 10) { $problems += "only $(@($bom.components).Count) components -- the tree is bigger than that" }
@@ -419,8 +417,6 @@ try {
         $problems = @()
         if ($readme -notmatch '(?i)unsigned') { $problems += 'README.md does not say the binary is unsigned' }
         if ($readme -notmatch '(?i)planning estimate') { $problems += 'README.md does not carry the planning-estimate boundary' }
-        $terms = Get-Content (Join-Path $work 'TERMS.md') -Raw
-        if ($terms -notmatch '(?i)not enabled|sales are not') { $problems += 'TERMS.md does not say sales are not enabled' }
         if ($problems) { $problems -join '; ' }
     }
 
