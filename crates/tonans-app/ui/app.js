@@ -21,6 +21,8 @@
  */
 
 import {
+  TARIFF_PRESETS,
+  annualNote,
   chooseStudyAxis,
   chooseStudyScenario,
   encodeFileNameHeader,
@@ -28,6 +30,7 @@ import {
   formatAxis,
   hasPriceAxis,
   parseValues,
+  readOptionalNumber,
   resultsStatus,
   sendTagged,
   studySettings,
@@ -491,8 +494,10 @@ async function refreshProjects() {
   }
 }
 
-function newProject() {
-  openDialog((dialog, close) => {
+async function newProject() {
+  // Before the dialog, so a project is never created while a question hangs over this one.
+  if (!(await settleUnsaved('create a new project'))) return;
+  const created = await openDialog((dialog, close) => {
     const name = el('input', { type: 'text', maxlength: '64', placeholder: 'Warehouse 3', autocomplete: 'off' });
     const timezone = timezoneInput(state.project?.site?.timezone || 'America/New_York');
     const failure = el('div', { class: 'banner critical hidden' });
@@ -523,13 +528,11 @@ function newProject() {
     ]));
     name.addEventListener('keydown', (event) => { if (event.key === 'Enter') create(); });
     setTimeout(() => name.focus(), 0);
-  }).then(async (created) => {
-    if (!created) return;
-    if (!(await settleUnsaved('open the new project'))) return;
-    await refreshProjects();
-    await openProject(created);
-    toast(`Created "${created}".`, null, true);
   });
+  if (!created) return;
+  await refreshProjects();
+  await openProject(created);
+  toast(`Created "${created}".`, null, true);
 }
 
 /** A free-text timezone box, with the IANA names offered where the webview knows them. */
@@ -774,7 +777,7 @@ function syncUnsaved() {
 const UNDO_LIMIT = 100;
 
 function checkpoint(label) {
-  state.undo.push({ label, json: editableJson() });
+  state.undo.push({ label, json: editableJson(), selected: state.selected });
   if (state.undo.length > UNDO_LIMIT) state.undo.shift();
   state.redo = [];
 }
@@ -801,8 +804,8 @@ function change(label, mutate) {
 function undo() {
   const entry = state.undo.pop();
   if (!entry) return;
-  state.redo.push({ label: entry.label, json: editableJson() });
-  restoreEditable(entry.json);
+  state.redo.push({ label: entry.label, json: editableJson(), selected: state.selected });
+  restoreEditable(entry.json, entry.selected);
   state.editKey = null;
   show(state.view, { keepScroll: true });
   syncUnsaved();
@@ -812,8 +815,8 @@ function undo() {
 function redo() {
   const entry = state.redo.pop();
   if (!entry) return;
-  state.undo.push({ label: entry.label, json: editableJson() });
-  restoreEditable(entry.json);
+  state.undo.push({ label: entry.label, json: editableJson(), selected: state.selected });
+  restoreEditable(entry.json, entry.selected);
   state.editKey = null;
   show(state.view, { keepScroll: true });
   syncUnsaved();
@@ -1949,26 +1952,6 @@ function applyToAll(label, copy) {
   } });
 }
 
-const TARIFF_PRESETS = [
-  { name: 'Prices from my data', needsSeries: true, apply(t) {
-    t.import = { source: 'series' };
-    t.export = { source: 'series' };
-  } },
-  { name: 'Flat energy price', apply(t) {
-    t.import = { source: 'flat', price_per_kwh_usd: 0.15 };
-    t.export = { source: 'flat', price_per_kwh_usd: 0.05 };
-  } },
-  { name: 'Flat energy plus a demand charge', apply(t, periods) {
-    t.import = { source: 'flat', price_per_kwh_usd: 0.10 };
-    t.export = { source: 'flat', price_per_kwh_usd: 0.04 };
-    t.demand_prices_per_kw_month_usd = Object.fromEntries(periods.map((period) => [period, 15]));
-  } },
-  { name: 'No export credit', apply(t) {
-    t.export = { source: 'flat', price_per_kwh_usd: 0 };
-    t.export_price_multiplier = 1;
-  } },
-];
-
 function tariffSection(scenario, prefix) {
   const t = scenario.tariff;
   const body = [];
@@ -2058,9 +2041,17 @@ function exportLimit(scenario, prefix) {
       ? '' : String(scenario.inverter.site_export_limit_kw),
   });
   input.addEventListener('input', () => {
-    const raw = input.value.trim();
+    // `1e` reaches this as a blank value, and only badInput tells it from a real blank.
+    const reading = readOptionalNumber(input.value, input.validity.badInput);
+    if (!reading.ok) {
+      input.setAttribute('aria-invalid', 'true');
+      input.title = 'Enter a number, or leave it blank for no limit.';
+      return;
+    }
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('title');
     recordEdit(`${prefix}export-limit`, 'edit a value', () => {
-      scenario.inverter.site_export_limit_kw = raw === '' ? null : Number(raw);
+      scenario.inverter.site_export_limit_kw = reading.value;
     });
   });
   return input;
@@ -2810,7 +2801,7 @@ function scenarioResult(run, s) {
   const e = s.energy;
   const k = s.economics;
   card.appendChild(el('div', { class: 'tiles' }, [
-    tile('Grid cost (annual)', fmt.usd(k.scenario_annual_grid_cost_usd), 'over the simulated year'),
+    tile('Grid cost (annual)', fmt.usd(k.scenario_annual_grid_cost_usd), annualNote(k.annualization_multiplier, e.duration_hours)),
     tile('Peak grid import', fmt.kw(e.peak_import_kw), 'sets the demand charge'),
     tile('Self-sufficiency', fmt.pct(e.self_sufficiency_pct), 'of load met by on-site generation, directly or after storage'),
     hasInvestment(s)
@@ -2986,14 +2977,15 @@ function outageTable(outages) {
 function cashFlowTable(k) {
   const table = el('table');
   table.appendChild(el('thead', {}, el('tr', {}, [
-    'Year', 'Usable capacity', 'Gross saving', 'Operating', 'Throughput', 'Replacement',
+    'Year', 'Usable capacity', 'Gross saving', 'Operating', 'Throughput', 'Installed cost', 'Replacement',
     'Net cash flow', 'Discounted', 'Cumulative',
   ].map((h) => el('th', { class: 'num', text: h })))));
   const body = el('tbody');
   body.appendChild(el('tr', {}, [
     el('td', { class: 'num', text: '0' }), el('td', { class: 'num', text: '—' }),
     el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: '—' }),
-    el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: fmt.usd(k.capex_usd) }),
+    el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: fmt.usd(-k.capex_usd) }),
+    el('td', { class: 'num', text: '—' }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
@@ -3005,6 +2997,7 @@ function cashFlowTable(k) {
       el('td', { class: 'num', text: fmt.usd(y.gross_savings_usd) }),
       el('td', { class: 'num', text: fmt.usd(-y.opex_usd) }),
       el('td', { class: 'num', text: fmt.usd(-y.throughput_cost_usd) }),
+      el('td', { class: 'num', text: '—' }),
       el('td', { class: 'num', text: y.replacement_usd > 0 ? fmt.usd(-y.replacement_usd) : '—' }),
       el('td', { class: `num ${y.net_cash_flow_usd >= 0 ? 'good' : 'bad'}`, text: fmt.usd(y.net_cash_flow_usd) }),
       el('td', { class: 'num', text: fmt.usd(y.discounted_cash_flow_usd) }),
@@ -3736,6 +3729,21 @@ function heatTable(study, metric) {
 
 async function runExport() {
   if (state.busy) return;
+  if (state.study && isUnsaved()) {
+    // Saving ends the study, because it was run on what is about to be replaced. That is
+    // the user's decision to make, not something to find out from a missing file.
+    const choice = await openDialog((dialog, close) => {
+      dialog.appendChild(el('h3', { text: 'Exporting will leave out this study' }));
+      dialog.appendChild(el('p', { text:
+        'You have unsaved changes, and exporting saves them first. The sensitivity study on screen was run on the ' +
+        'last saved assumptions, so saving discards it and the bundle will not include it.' }));
+      dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+        el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+        el('button', { type: 'button', text: 'Save and export without the study', class: 'primary', onclick: () => close('save') }),
+      ]));
+    });
+    if (choice !== 'save') return;
+  }
   if (!(await ensureSaved())) return;
   const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
     const mark = markBusy('export', stamp);
@@ -3781,7 +3789,9 @@ function renderExport() {
     el('div', { class: 'row' }, [
       go,
       el('span', { class: 'tiny muted', text: state.study
-        ? 'The current sensitivity study will be included.'
+        ? (isUnsaved()
+          ? 'Saving discards the sensitivity study on screen, so this export would leave it out. You will be asked first.'
+          : 'The current sensitivity study will be included.')
         : 'Run a sensitivity study first to include one.' }),
     ]),
   ]));

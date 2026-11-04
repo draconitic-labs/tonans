@@ -889,17 +889,16 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
         );
     }
 
-    html.push_str("<div class=\"scroll\"><table class=\"num-table\">\n<thead><tr><th class=\"num\">Year</th><th class=\"num\">Usable capacity (%)</th><th class=\"num\">Gross saving</th><th class=\"num\">Operating cost</th><th class=\"num\">Throughput cost</th><th class=\"num\">Replacement</th><th class=\"num\">Net cash flow</th><th class=\"num\">Discounted</th><th class=\"num\">Cumulative discounted</th></tr></thead>\n<tbody>\n");
+    html.push_str("<div class=\"scroll\"><table class=\"num-table\">\n<thead><tr><th class=\"num\">Year</th><th class=\"num\">Usable capacity (%)</th><th class=\"num\">Gross saving</th><th class=\"num\">Operating cost</th><th class=\"num\">Throughput cost</th><th class=\"num\">Installed cost</th><th class=\"num\">Replacement</th><th class=\"num\">Net cash flow</th><th class=\"num\">Discounted</th><th class=\"num\">Cumulative discounted</th></tr></thead>\n<tbody>\n");
     let _ = writeln!(
         html,
-        "<tr><td class=\"num\">0</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">{capex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td></tr>",
-        capex = money(economics.capex_usd, currency),
+        "<tr><td class=\"num\">0</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">{negcapex}</td><td class=\"num\">—</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td></tr>",
         negcapex = money(-economics.capex_usd, currency)
     );
     for year in &economics.cash_flow {
         let _ = writeln!(
             html,
-            "<tr><td class=\"num\">{year}</td><td class=\"num\">{capacity}</td><td class=\"num\">{gross}</td><td class=\"num\">{opex}</td><td class=\"num\">{throughput}</td><td class=\"num\">{replacement}</td><td class=\"num\">{net}</td><td class=\"num\">{discounted}</td><td class=\"num\">{cumulative}</td></tr>",
+            "<tr><td class=\"num\">{year}</td><td class=\"num\">{capacity}</td><td class=\"num\">{gross}</td><td class=\"num\">{opex}</td><td class=\"num\">{throughput}</td><td class=\"num\">—</td><td class=\"num\">{replacement}</td><td class=\"num\">{net}</td><td class=\"num\">{discounted}</td><td class=\"num\">{cumulative}</td></tr>",
             year = year.year,
             capacity = escape(&format!("{:.1}", year.capacity_retention_pct)),
             gross = money(year.gross_savings_usd, currency),
