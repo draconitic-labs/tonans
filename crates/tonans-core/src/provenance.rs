@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical::{canonical_hash, Hash};
 use crate::error::{Result, Warning};
-use crate::licensing::Tier;
 use crate::limits::Limits;
 use crate::run::RunResult;
 use crate::schema::{Dataset, Project, Scenario};
@@ -195,10 +194,6 @@ pub struct Provenance {
     /// Every file in the bundle, hashed. Empty until [`Provenance::with_artifacts`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<Artifact>,
-    /// The entitlement tier the run happened under.
-    pub tier: Tier,
-    /// Whether these artifacts may be handed to a third party.
-    pub client_report_rights: bool,
     /// The planning-only disclaimer, in the data rather than only in a template.
     pub disclaimer: String,
     /// What this model does not do.
@@ -259,8 +254,6 @@ impl Provenance {
             limits: result.limits,
             warnings: result.all_warnings(),
             artifacts: Vec::new(),
-            tier: result.tier,
-            client_report_rights: result.client_report_rights,
             disclaimer: PLANNING_DISCLAIMER.to_string(),
             model_exclusions: MODEL_EXCLUSIONS.iter().map(|s| (*s).to_string()).collect(),
         })
