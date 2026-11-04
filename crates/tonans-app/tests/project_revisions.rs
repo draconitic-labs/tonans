@@ -266,6 +266,39 @@ fn a_second_heavy_request_is_told_what_is_running() {
     assert_eq!(status, 200, "{text}");
 }
 
+/// The review's sequence: the file is moved away, and every save said no such project.
+#[test]
+fn a_project_whose_file_has_gone_is_detected_and_saved_back() {
+    let root = workspace_root("gone");
+    let window = Window::open(&root);
+    window.create("Rev");
+    let (project, revision) = window.open_project("Rev");
+    let file = root.join("projects").join("Rev.tonans.json");
+    std::fs::rename(&file, root.join("away.json")).unwrap();
+
+    // The window can find out without saving.
+    let (status, _, text) = window.send("GET", "/api/projects/Rev/revision", None, "");
+    assert_eq!(status, 422, "{text}");
+    assert!(text.contains("schema.project_not_found"), "{text}");
+
+    let body = project.to_string();
+    let (status, _, text) = window.send("PUT", "/api/projects/Rev", Some(&revision), &body);
+    assert_eq!(status, 409, "{text}");
+    assert!(text.contains("conflict.project_missing"), "{text}");
+    assert!(!file.exists());
+
+    let (status, written, text) = window.send(
+        "PUT",
+        "/api/projects/Rev",
+        Some(tonans_core::store::REVISION_FILE_GONE),
+        &body,
+    );
+    assert_eq!(status, 200, "{text}");
+    assert!(file.exists());
+    let (_, reopened) = window.open_project("Rev");
+    assert_eq!(Some(reopened), written);
+}
+
 #[test]
 fn a_save_that_does_not_name_a_revision_is_refused() {
     let root = workspace_root("missing");

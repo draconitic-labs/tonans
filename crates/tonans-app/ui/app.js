@@ -50,6 +50,10 @@ const state = {
   revision: null,
   /** True once this window has seen a different revision on disk. */
   changedElsewhere: false,
+  /** True once the project's file has gone: what is on screen is then the only copy. */
+  projectMissing: false,
+  /** Why the last Reopen failed. It stays on screen until that is dealt with. */
+  reopenError: null,
   /** Bumped by each open, so the slower of two opens cannot replace the newer. */
   openTicket: 0,
   saving: null,
@@ -319,6 +323,13 @@ function reportFailure(error) {
     offerReopen();
     return;
   }
+  if (error.code === 'conflict.project_missing') {
+    state.projectMissing = true;
+    syncUnsaved();
+    redrawForChange();
+    offerSaveAgain();
+    return;
+  }
   toast(error.message, error.code);
 }
 
@@ -355,8 +366,12 @@ function openDialog(build) {
 async function settleUnsaved(what) {
   if (!isUnsaved()) return true;
   const choice = await openDialog((dialog, close) => {
-    dialog.appendChild(el('h3', { text: 'This project has unsaved changes' }));
-    dialog.appendChild(el('p', { text: `Save them before you ${what}?` }));
+    dialog.appendChild(el('h3', { text: state.projectMissing
+      ? 'This project\'s file has gone from the workspace'
+      : 'This project has unsaved changes' }));
+    dialog.appendChild(el('p', { text: state.projectMissing
+      ? `What is on this screen is the only copy. Save it before you ${what}?`
+      : `Save them before you ${what}?` }));
     dialog.appendChild(el('div', { class: 'dialog-actions' }, [
       el('button', { type: 'button', text: 'Keep working', onclick: () => close('cancel') }),
       el('button', { type: 'button', text: 'Discard changes', class: 'danger', onclick: () => close('discard') }),
@@ -368,9 +383,30 @@ async function settleUnsaved(what) {
   if (choice === 'discard') {
     restoreEditable(state.savedJson);
     syncUnsaved();
+    // The inputs on screen are bound to the objects just replaced, and the next step can fail.
+    show(state.view, { keepScroll: true });
     return true;
   }
   return false;
+}
+
+/** The project's file has gone. Saving writes it back, and the user says when. */
+async function offerSaveAgain() {
+  if (document.getElementById('dialog').open) {
+    toast('This project\'s file has gone from the workspace. Nothing was saved.', 'conflict.project_missing');
+    return;
+  }
+  const choice = await openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: 'This project\'s file has gone from the workspace' }));
+    dialog.appendChild(el('p', { text:
+      'It was moved or deleted outside Tonans, and nothing was saved just now. What is on this screen is the only copy. ' +
+      'Saving again writes it back to the workspace, under the same name.' }));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+      el('button', { type: 'button', text: 'Save it again', class: 'primary', onclick: () => close('save') }),
+    ]));
+  });
+  if (choice === 'save') await guard(saveProject);
 }
 
 /**
@@ -395,21 +431,32 @@ async function offerReopen() {
       el('button', { type: 'button', text: 'Reopen the project', class: 'primary', onclick: () => close('reopen') }),
     ]));
   });
-  if (choice !== 'reopen') return;
-  restoreEditable(state.savedJson);
-  syncUnsaved();
-  await openProject(state.project.name);
+  // The edits go only when the latest version has arrived to replace them. If it cannot be
+  // read, nothing has moved: they are still in the project, still unsaved, and the inputs on
+  // screen are still bound to them.
+  if (choice === 'reopen') await openProject(state.project.name, { replacingEdits: true });
 }
 
 /** Has anyone else written this project? Asked on focus and on each change of screen. */
 async function checkForOutsideChange() {
   const stamp = currentStamp();
   if (!stamp.project) return;
-  const found = await api(`/api/projects/${encodeURIComponent(stamp.project)}/revision`).catch(() => null);
-  if (!found || state.project?.name !== stamp.project || state.revision !== stamp.revision) return;
-  const changed = found.revision !== stamp.revision;
-  if (changed === state.changedElsewhere) return;
+  let found = null;
+  try {
+    found = await api(`/api/projects/${encodeURIComponent(stamp.project)}/revision`);
+  } catch (error) {
+    if (error.code !== 'schema.project_not_found') return;
+  }
+  if (state.project?.name !== stamp.project || state.revision !== stamp.revision) return;
+  const missing = !found;
+  const changed = Boolean(found) && found.revision !== stamp.revision;
+  // The file is back as this window read it, so whatever Reopen could not read is over.
+  const reopenError = !missing && !changed ? null : state.reopenError;
+  if (changed === state.changedElsewhere && missing === state.projectMissing && reopenError === state.reopenError) return;
   state.changedElsewhere = changed;
+  state.projectMissing = missing;
+  state.reopenError = reopenError;
+  syncUnsaved();
   redrawForChange();
 }
 
@@ -423,6 +470,11 @@ function redrawForChange() {
 
 /** A sentence about how far to trust what a screen shows, or nothing if it is all current. */
 function staleNotice(unsavedText) {
+  if (state.projectMissing) {
+    return el('div', { class: 'banner', text:
+      'This project\'s file has gone from the workspace, moved or deleted outside Tonans. What is shown here is the only ' +
+      'copy. Saving writes it back.' });
+  }
   if (state.changedElsewhere) {
     return el('div', { class: 'banner', text:
       'This project was changed somewhere else after this window read it. What is shown here is from the version ' +
@@ -567,16 +619,29 @@ function timezoneInput(value) {
   return input;
 }
 
-async function openProject(name) {
-  if (!(await settleUnsaved(`open ${name}`))) return;
+async function openProject(name, { replacingEdits = false } = {}) {
+  if (!replacingEdits && !(await settleUnsaved(`open ${name}`))) return;
   const ticket = ++state.openTicket;
-  const reply = await guard(() => request(`/api/projects/${encodeURIComponent(name)}`));
-  if (!reply || ticket !== state.openTicket) return;
+  let reply;
+  try {
+    reply = await request(`/api/projects/${encodeURIComponent(name)}`);
+  } catch (error) {
+    if (replacingEdits) {
+      state.reopenError = { code: error.code, message: error.message };
+      syncUnsaved();
+      redrawForChange();
+    }
+    reportFailure(error);
+    return;
+  }
+  if (ticket !== state.openTicket) return;
   const project = reply.body;
   forgetStagedUpload();
   state.project = project;
   state.revision = reply.revision;
   state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
   state.profile = null;
   dropDerivedResults();
   state.timelines = {};
@@ -694,6 +759,14 @@ function renderBus() {
 /** The next useful thing, in one line, with the button that does it. */
 function nextStep() {
   const project = state.project;
+  if (state.projectMissing) {
+    return { text: 'This project\'s file has gone from the workspace. What is on this screen is the only copy.',
+             label: 'Save it again', run: () => guard(saveProject) };
+  }
+  if (state.reopenError) {
+    return { text: `Could not reopen this project: ${state.reopenError.message} Your edits are still here, and they are not saved.`,
+             label: 'Try again', run: offerReopen };
+  }
   if (state.changedElsewhere) {
     return { text: 'This project was changed somewhere else, probably in another window.',
              label: 'Reopen the project', run: offerReopen };
@@ -767,7 +840,7 @@ function dropDerivedResults() {
 }
 
 function isUnsaved() {
-  return Boolean(state.project) && editableJson() !== state.savedJson;
+  return Boolean(state.project) && (state.projectMissing || editableJson() !== state.savedJson);
 }
 
 function markSaved() {
@@ -868,7 +941,12 @@ async function writeProject() {
   const sent = editableJson();
   let reply;
   try {
-    reply = await request(projectPath(), { method: 'PUT', body: state.project, revision: stamp.revision });
+    // A save the user knows is writing the file back says so. Otherwise it would be told again.
+    reply = await request(projectPath(), {
+      method: 'PUT',
+      body: state.project,
+      revision: state.projectMissing ? 'gone' : stamp.revision,
+    });
   } catch (error) {
     // Point at the scenario the error names, rather than leaving the reader to hunt.
     const named = /scenario\[([^\]]+)\]/.exec(error.message);
@@ -884,6 +962,8 @@ async function writeProject() {
   state.project = reply.body;
   state.revision = reply.revision;
   state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
   // Results were produced from the old assumptions and are now stale. Throwing them
   // away is the only honest thing to do: a chart next to assumptions it was not
   // produced from is worse than no chart.
@@ -1571,6 +1651,8 @@ async function runImport(receipt) {
   state.project = result.project;
   state.revision = reply.revision;
   state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
   state.upload = null;
   state.mapping = null;
   state.importError = null;

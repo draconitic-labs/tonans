@@ -209,6 +209,17 @@ mod tests {
     }
 
     #[test]
+    fn reopening_drops_the_edits_only_once_the_latest_version_has_arrived() {
+        let code = code_only(SCRIPT);
+        let start = code.find("async function offerReopen()").unwrap();
+        let end = start + code[start..].find("\n}\n").unwrap();
+        assert!(
+            !code[start..end].contains("restoreEditable"),
+            "a Reopen that then fails would leave the screen showing edits the project has lost"
+        );
+    }
+
+    #[test]
     fn a_large_file_is_measured_before_any_of_it_is_read() {
         let code = code_only(SCRIPT);
         let measured = code.find("fileTooLarge(file.name, file.size").unwrap();

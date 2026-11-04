@@ -34,6 +34,10 @@ use crate::schema::{migrate, Project};
 /// The suffix every project file carries. Chosen by Tonans, never by the user.
 const PROJECT_SUFFIX: &str = ".tonans.json";
 
+/// What a save names as its revision once it has been told the project's file has gone.
+/// Not a digest, so it can never match a real file.
+pub const REVISION_FILE_GONE: &str = "gone";
+
 /// A workspace on disk.
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -276,22 +280,44 @@ impl Workspace {
     ///
     /// A stale window gets [`Error::Conflict`] and writes nothing, so it cannot put back
     /// what it last read over what another window has saved since.
+    ///
+    /// If the file has gone, a save is told so, and goes through once it names
+    /// [`REVISION_FILE_GONE`], so a project on screen always has somewhere to go.
     pub fn save_project_at_revision(
         &self,
         project: &Project,
         expected_revision: &str,
     ) -> Result<String> {
         let _lock = self.lock_for_write()?;
-        let (_, current) = self.load_project_at_revision(&project.name)?;
-        if current != expected_revision {
-            return Err(Error::Conflict {
-                code: "conflict.project_changed",
-                message: format!(
-                    "'{}' was changed somewhere else after this window read it, probably in \
-                     another Tonans window. Nothing was saved, so that change is intact.",
-                    project.name
-                ),
-            });
+        let exists = self.project_path(&project.name)?.exists();
+        let changed = || Error::Conflict {
+            code: "conflict.project_changed",
+            message: format!(
+                "'{}' was changed somewhere else after this window read it, probably in \
+                 another Tonans window. Nothing was saved, so that change is intact.",
+                project.name
+            ),
+        };
+        match (exists, expected_revision == REVISION_FILE_GONE) {
+            (false, false) => {
+                return Err(Error::Conflict {
+                    code: "conflict.project_missing",
+                    message: format!(
+                        "the file for '{}' has gone from the workspace, moved or deleted outside \
+                         Tonans. Nothing was saved. Saving again writes what is on screen back to \
+                         the workspace.",
+                        project.name
+                    ),
+                })
+            }
+            (false, true) => {}
+            (true, true) => return Err(changed()),
+            // By digest alone: a file that no longer parses is still a file that changed.
+            (true, false) => {
+                if self.project_revision(&project.name)? != expected_revision {
+                    return Err(changed());
+                }
+            }
         }
         self.write_project(project)
     }
@@ -321,6 +347,18 @@ impl Workspace {
                 json.len() as u64,
                 "this project is larger than Tonans will write",
             ));
+        }
+
+        // An atomic write replaces the file, so it would go straight past a read-only mark.
+        if fs::metadata(&path).is_ok_and(|metadata| metadata.permissions().readonly()) {
+            return Err(Error::UnsafePath {
+                code: "path.read_only",
+                message: format!(
+                    "the file for '{}' is read-only, so nothing was saved. Make it writable, then \
+                     save again.",
+                    project.name
+                ),
+            });
         }
 
         write_atomically(&path, json.as_bytes())?;
@@ -665,6 +703,78 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn a_project_whose_file_has_gone_can_be_saved_once_it_says_it_knows() {
+        let (workspace, root) = revision_workspace("gone");
+        let project = revision_project("Gone");
+        let revision = workspace.write_project(&project).unwrap();
+        let path = workspace.project_path("Gone").unwrap();
+        let moved = root.join("moved-away.json");
+        fs::rename(&path, &moved).unwrap();
+
+        let refused = workspace
+            .save_project_at_revision(&project, &revision)
+            .unwrap_err();
+        assert_eq!(refused.code(), "conflict.project_missing");
+        assert_eq!(refused.http_status(), 409);
+        assert!(!path.exists(), "told, and not written");
+
+        let written = workspace
+            .save_project_at_revision(&project, REVISION_FILE_GONE)
+            .unwrap();
+        assert!(path.exists());
+        assert_eq!(workspace.project_revision("Gone").unwrap(), written);
+
+        // Once it is back, the same promise is no longer true.
+        let refused = workspace
+            .save_project_at_revision(&project, REVISION_FILE_GONE)
+            .unwrap_err();
+        assert_eq!(refused.code(), "conflict.project_changed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_save_over_a_file_that_no_longer_parses_is_a_conflict_not_a_schema_error() {
+        let (workspace, root) = revision_workspace("garbled");
+        let project = revision_project("Garbled");
+        let revision = workspace.write_project(&project).unwrap();
+        let path = workspace.project_path("Garbled").unwrap();
+        fs::write(&path, "not json").unwrap();
+        let refused = workspace
+            .save_project_at_revision(&project, &revision)
+            .unwrap_err();
+        assert_eq!(refused.code(), "conflict.project_changed");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_save_over_a_read_only_project_file_is_refused_clearly() {
+        let (workspace, root) = revision_workspace("readonly");
+        let project = revision_project("Locked");
+        let revision = workspace.write_project(&project).unwrap();
+        let path = workspace.project_path("Locked").unwrap();
+        let before = fs::read(&path).unwrap();
+        let writable = fs::metadata(&path).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        fs::set_permissions(&path, read_only).unwrap();
+
+        let refused = workspace
+            .save_project_at_revision(&project, &revision)
+            .unwrap_err();
+        assert_eq!(refused.code(), "path.read_only");
+        assert!(refused.to_string().contains("read-only"), "{refused}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        // The test's own folder has to be removable on Windows.
+        fs::set_permissions(&path, writable).unwrap();
+        workspace
+            .save_project_at_revision(&project, &revision)
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_chosen_file_keeps_its_permissions_and_a_link_stays_a_link() {
         use std::os::unix::fs::{symlink, PermissionsExt};
