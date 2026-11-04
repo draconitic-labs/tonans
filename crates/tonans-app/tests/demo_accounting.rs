@@ -50,3 +50,26 @@ fn the_demo_hashes_have_not_moved() {
         "sha256:b9512228beb1b6a11e46bdc5285516fb67fd89edc2441575fc29044dbf90abba"
     );
 }
+
+#[test]
+fn a_battery_with_no_capital_cost_reads_as_nothing_to_repay_in_the_report() {
+    let mut project = demo::build(now()).unwrap();
+    let scenario = project
+        .scenarios
+        .iter_mut()
+        .find(|s| s.id == "peak-limit")
+        .unwrap();
+    scenario.economics.capex_usd = 0.0;
+    scenario.economics.replacement = None;
+    let result = run::run_project(&project, now()).unwrap();
+    let economics = &result.scenario("peak-limit").unwrap().economics;
+    assert!(economics.simple_payback_years.is_none());
+    assert!(economics.npv_usd > 0.0, "{}", economics.npv_usd);
+
+    let directory = std::env::temp_dir().join(format!("tonans-capex-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    tonans_core::export::write_bundle(&directory, &project, &result, &[]).unwrap();
+    let html = std::fs::read_to_string(directory.join("report.html")).unwrap();
+    assert!(html.contains("no capital to repay"));
+    std::fs::remove_dir_all(directory).unwrap();
+}

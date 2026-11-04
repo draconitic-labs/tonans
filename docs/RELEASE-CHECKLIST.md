@@ -204,7 +204,7 @@ Tauri moves.
 | Advisory | Crate | What it is | Why it is accepted for now |
 |---|---|---|---|
 | RUSTSEC-2024-0429 | glib 0.18.5 | Unsound `VariantStrIter` | Fixed in glib 0.20, but gtk 0.18 under Tauri holds it at 0.18. Tonans calls only `glib::set_prgname`, and no other crate in the locked tree names `VariantStrIter` or `array_iter_str` (searched 2026-11-04). |
-| RUSTSEC-2024-0370 | proc-macro-error 1.0.4 | Unmaintained | Used only at compile time through glib-macros. Not in the binary. |
+| RUSTSEC-2024-0370 | proc-macro-error 1.0.4 | Unmaintained | Used only at compile time through glib-macros and gtk3-macros. Not in the binary. |
 | RUSTSEC-2026-0370 | zvariant 5.15.1 | Unmaintained, merged into zbus 6 | No patched release. Linux only, through zbus 5 under tauri-plugin-opener, for the one call asking the local file manager to show a folder. |
 | RUSTSEC-2026-0371 | zbus_names 4.3.5 | Unmaintained, merged into zbus 6 | As above. |
 | RUSTSEC-2026-0372 | zvariant_derive 5.15.1 | Unmaintained, merged into zbus 6 | As above, at compile time. |

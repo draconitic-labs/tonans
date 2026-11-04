@@ -202,6 +202,21 @@ fn the_warning_reaches_a_study_but_not_the_numeric_identity() {
 }
 
 #[test]
+fn the_report_and_the_export_carry_the_warning() {
+    let project = project(start(2023, 7, 15), "UTC");
+    let result = run::run_project(&project, now()).unwrap();
+    let directory = std::env::temp_dir().join(format!("tonans-months-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    tonans_core::export::write_bundle(&directory, &project, &result, &[]).unwrap();
+    for file in ["report.html", "provenance.json", "summary.json"] {
+        let text = std::fs::read_to_string(directory.join(file)).unwrap();
+        assert!(text.contains(CODE), "{file}");
+        assert!(text.contains("13 months were billed"), "{file}");
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn a_short_file_says_how_many_months_it_billed_in_the_singular() {
     let mut project = project(start(2023, 1, 1), "UTC");
     let dataset = project.dataset.as_mut().unwrap();

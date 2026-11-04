@@ -13,7 +13,12 @@
  * WebKit and WebView2 disagree about the ones below it, so the name travels as ASCII.
  * The server's `decode_file_name` undoes this.
  */
-export const encodeFileNameHeader = (name) => encodeURIComponent(name);
+export function encodeFileNameHeader(name) {
+  // Windows allows a file name that is not valid Unicode, and encodeURIComponent throws on one.
+  return encodeURIComponent(name.replace(UNPAIRED_SURROGATE, '\uFFFD'));
+}
+
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 export function formatBytes(bytes) {
   const mib = bytes / (1024 * 1024);
@@ -95,6 +100,11 @@ export const TARIFF_PRESETS = [
 // ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
+
+/** Why there is no payback figure: nothing to repay is not the same as never repaying it. */
+export function noPaybackText(capexUsd, notRepaid) {
+  return capexUsd > 0 ? notRepaid : 'No capital to repay';
+}
 
 /** What the annual figure on a tile really covers. */
 export function annualNote(multiplier, hours) {

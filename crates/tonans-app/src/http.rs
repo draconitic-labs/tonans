@@ -151,7 +151,7 @@ pub trait Handler: Send + Sync + 'static {
 pub fn internal_error() -> Response {
     Response::json(
         500,
-        r#"{"code":"http.internal","message":"Tonans hit an internal error handling this request. Nothing was changed by it. Please report it."}"#,
+        r#"{"code":"http.internal","message":"Tonans hit an internal error handling this request, so it may or may not have finished. Check the result before trying again, and please report it."}"#,
     )
 }
 

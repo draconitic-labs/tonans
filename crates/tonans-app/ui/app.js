@@ -29,6 +29,7 @@ import {
   fileTooLarge,
   formatAxis,
   hasPriceAxis,
+  noPaybackText,
   parseValues,
   readOptionalNumber,
   resultsStatus,
@@ -129,7 +130,7 @@ async function request(path, { method = 'GET', body, raw, filename, revision } =
     text = await response.text();
   } catch {
     // All a page gets from a dropped connection is a TypeError saying "Load failed".
-    const error = new Error('Tonans could not get an answer from its own local server. Nothing was changed by this request. Try again, or restart Tonans.');
+    const error = new Error('Tonans lost its answer from its own local server, so it cannot tell whether this finished. Check the result before trying again, or restart Tonans.');
     error.code = 'ui.no_answer';
     throw error;
   }
@@ -331,6 +332,8 @@ function reportFailure(error) {
     return;
   }
   toast(error.message, error.code);
+  // A run or a study can be the first to find the file gone.
+  if (error.code === 'schema.project_not_found') checkForOutsideChange();
 }
 
 async function guard(work) {
@@ -2850,7 +2853,7 @@ function comparisonSection(run) {
     // "Never" is a claim about an investment, so a scenario without one has no payback.
     row.appendChild(el('td', { class: 'num', text: !hasInvestment(s) ? '—'
       : (k.simple_payback_years === null || k.simple_payback_years === undefined
-        ? `Not in ${k.horizon_years} years` : fmt.years(k.simple_payback_years)) }));
+        ? noPaybackText(k.capex_usd, `Not in ${k.horizon_years} years`) : fmt.years(k.simple_payback_years)) }));
 
     const outages = s.outages ?? [];
     const survived = outages.filter((o) => o.survived).length;
@@ -3831,7 +3834,7 @@ function heatTable(study, metric) {
       const cell = study.cells[r * colValues.length + c];
       const value = cell ? metric.read(cell.metrics) : null;
       if (value === null || value === undefined) {
-        tr.appendChild(el('td', { text: cell && metric.id === 'payback' ? 'Not repaid' : '' }));
+        tr.appendChild(el('td', { text: cell && metric.id === 'payback' ? noPaybackText(cell.metrics.installed_cost_usd, 'Not repaid') : '' }));
         return;
       }
       const fill = fillFor(value);

@@ -164,6 +164,10 @@ totals are rounded once at the output boundary using decimal half-away-from-zero
 the cent. Machine-readable interval values retain sufficient decimal precision for
 their sum to reconcile with the unrounded accumulator before the final cent rounding.
 
+The report is written to be read, so it then shortens large amounts: 10,000 USD and over prints
+as `-228.4k USD`, and 1,000,000 USD and over as `1.23M USD`. Its tables can be followed but not
+added up to the cent. `summary.json`, `scenarios.csv`, and the timeseries CSVs hold the full figures.
+
 Tariff support includes:
 
 - flat or per-interval import energy rates;
@@ -190,8 +194,12 @@ and moves nothing.
 ## Economics
 
 Tonans reports CAPEX, annual OPEX, replacement assumptions, simple and discounted
-payback, and a simple NPV against the no-storage baseline. It includes no tax,
-incentive, depreciation, or residual value.
+payback, and a simple NPV against the project's chosen baseline, which is usually no storage
+and may itself have a battery. It includes no tax, incentive, depreciation, or residual value.
+
+A scenario with no capital cost has no payback, because it has nothing to repay. The screens and
+the report say so, and CSV and JSON leave the field empty, as they do for capital that is not repaid
+within the horizon. The installed cost beside it tells the two apart.
 
 If a data set is shorter than a year, period results are multiplied by the stated
 annualization factor. A warning explains that demand charges and seasonal behavior

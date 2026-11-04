@@ -9,7 +9,7 @@ ignore = [
     # tree other than glib names VariantStrIter or array_iter_str.
     "RUSTSEC-2024-0429",
     # proc-macro-error 1.0.4: unmaintained, no replacement in this stack. Reached only through
-    # glib-macros at compile time. It is not in the binary.
+    # glib-macros and gtk3-macros at compile time. It is not in the binary.
     "RUSTSEC-2024-0370",
     # zvariant, zbus_names, zvariant_derive: unmaintained, merged into zbus 6, no patched
     # release. Reached through zbus 5 under tauri-plugin-opener, on Linux only, for the one

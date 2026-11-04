@@ -248,7 +248,7 @@ fn comparison_table(html: &mut String, run: &RunResult, currency: &str) {
             },
             payback = economics
                 .simple_payback_years
-                .map_or_else(|| "never".to_string(), |y| format!("{y:.1}")),
+                .map_or_else(|| no_payback(economics.capex_usd), |y| format!("{y:.1}")),
         );
     }
     html.push_str("</tbody>\n</table></div>\n</section>\n");
@@ -874,9 +874,10 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
         npv = money(economics.npv_usd, currency),
         horizon = economics.horizon_years,
         discount = format_number(economics.discount_rate_pct_per_year),
-        payback = economics
-            .simple_payback_years
-            .map_or_else(|| "never".to_string(), |y| format!("{y:.1} years")),
+        payback = economics.simple_payback_years.map_or_else(
+            || no_payback(economics.capex_usd),
+            |y| format!("{y:.1} years")
+        ),
         saving = money(economics.year_one_gross_savings_usd, currency),
         cycles = escape(&format!("{:.1}", economics.equivalent_full_cycles_per_year)),
     );
@@ -1028,7 +1029,7 @@ fn sensitivity_table(html: &mut String, study: &SensitivityResult, currency: &st
             npv = money(m.npv_usd, currency),
             payback = m
                 .simple_payback_years
-                .map_or_else(|| "never".to_string(), |y| format!("{y:.1}")),
+                .map_or_else(|| no_payback(m.installed_cost_usd), |y| format!("{y:.1}")),
             peak = escape(&format_number(m.peak_import_kw)),
             unmet_class = if m.unmet_critical_kwh > 1e-9 { "bad" } else { "" },
             unmet = escape(&format_number(m.unmet_critical_kwh)),
@@ -1180,6 +1181,15 @@ fn footer(html: &mut String, run: &RunResult) {
 // ---------------------------------------------------------------------------
 // Presentation
 // ---------------------------------------------------------------------------
+
+/// Why there is no payback figure. Nothing to repay is not the same as never repaying it.
+fn no_payback(capex_usd: f64) -> String {
+    if capex_usd > 0.0 {
+        "never".to_string()
+    } else {
+        "no capital to repay".to_string()
+    }
+}
 
 fn money(value: f64, currency: &str) -> String {
     let rounded = round_money(value);

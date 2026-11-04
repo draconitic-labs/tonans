@@ -959,6 +959,7 @@ mod tests {
             ("M%C3%BCller.csv", "Müller.csv"),
             ("plain.csv", "plain.csv"),
             ("100%25%20load.csv", "100% load.csv"),
+            ("load%EF%BF%BD.csv", "load\u{FFFD}.csv"),
         ] {
             assert_eq!(decode_file_name(Some(encoded)).unwrap(), expected);
         }

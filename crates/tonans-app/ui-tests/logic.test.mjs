@@ -12,6 +12,7 @@ import {
   fileTooLarge,
   formatAxis,
   hasPriceAxis,
+  noPaybackText,
   parseValues,
   readOptionalNumber,
   resultsStatus,
@@ -34,6 +35,11 @@ test('a file name becomes the ASCII the server decodes', () => {
     assert.equal(encodeFileNameHeader(name), encoded);
     assert.match(encoded, /^[\x20-\x7e]*$/, 'fetch accepts only this in a header');
   }
+  // A name that is not valid Unicode, which Windows allows, is sent with the bad part marked,
+  // and the pairs that make up a real character are left alone.
+  assert.equal(encodeFileNameHeader('load\uD83D.csv'), 'load%EF%BF%BD.csv');
+  assert.equal(encodeFileNameHeader('\uDC00load.csv'), '%EF%BF%BDload.csv');
+  assert.equal(encodeFileNameHeader('load\u{1F600}.csv'), 'load%F0%9F%98%80.csv');
   // A path separator is sent as itself encoded, so that the server sees and refuses it.
   assert.equal(encodeFileNameHeader('../evil.csv'), '..%2Fevil.csv');
 });
@@ -126,6 +132,12 @@ test('the annual tile says what it covers', () => {
   assert.equal(annualNote(1, 8760), 'over the simulated year');
   assert.equal(annualNote(1.005, 8716), 'over the simulated year');
   assert.equal(annualNote(2920, 3), 'scaled 2,920 times from 3 hours of data');
+});
+
+test('a battery with no capital cost has nothing to repay, which is not never repaying it', () => {
+  assert.equal(noPaybackText(0, 'Not in 15 years'), 'No capital to repay');
+  assert.equal(noPaybackText(100000, 'Not in 15 years'), 'Not in 15 years');
+  assert.equal(noPaybackText(100000, 'Not repaid'), 'Not repaid');
 });
 
 test('axis values are shown as they are', () => {

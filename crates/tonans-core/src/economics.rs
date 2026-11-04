@@ -5,8 +5,8 @@
 //!
 //! There is no solver here and no curve fit. The whole model is a year of
 //! simulated grid cost, a difference against a baseline, a fade approximation,
-//! and a discounted cash flow — and the report prints the year-by-year table so a
-//! reader can add it up themselves.
+//! and a discounted cash flow. The report prints the year-by-year table so a reader
+//! can follow it, and `summary.json` holds the exact figures to add up.
 //!
 //! # The three approximations, stated plainly
 //!
