@@ -1,4 +1,4 @@
-//! Server state: the workspace, the launch token, the entitlements, and the one
+//! Server state: the workspace, the launch token, and the one
 //! staged upload slot.
 
 use std::net::SocketAddr;
@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tonans_core::error::{Error, Result};
-use tonans_core::licensing::{BuiltInEvaluation, EntitlementSource, Entitlements};
 use tonans_core::limits;
 use tonans_core::store::Workspace;
 
@@ -15,9 +14,8 @@ use crate::clock;
 
 /// The name of the bundled demonstration project.
 ///
-/// Reserved: a user project may not take it, and it does not count against the
-/// evaluation tier's project limit. The demo exists so that a first launch has
-/// something to open.
+/// Reserved: a user project may not take it. The demo exists so that a first launch
+/// has something to open.
 pub const DEMO_PROJECT_NAME: &str = "Demo - Riverside Works";
 
 /// Requests allowed in one window. Generous for a human driving a browser, and low
@@ -49,8 +47,6 @@ pub struct AppState {
     pub workspace: Workspace,
     /// The bearer token minted at launch. Required by every `/api` route.
     pub token: String,
-    /// What this build permits.
-    pub entitlements: Entitlements,
     /// The address actually bound. A request whose `Host` does not match is refused,
     /// which is what stops DNS rebinding.
     pub bind: SocketAddr,
@@ -68,9 +64,6 @@ impl AppState {
         Self {
             workspace,
             token,
-            // The shipped build is always evaluation. There is no licence file to read
-            // and no server to ask; see `tonans_core::licensing`.
-            entitlements: BuiltInEvaluation.entitlements(),
             bind,
             upload: Mutex::new(None),
             rate: Mutex::new(RateWindow::new()),
@@ -125,16 +118,6 @@ impl AppState {
     /// Whether this request is inside the rate limit.
     pub fn allow_request(&self) -> bool {
         self.rate.lock().is_ok_and(|mut window| window.allow())
-    }
-
-    /// The user projects that count against the entitlement, i.e. not the demo.
-    pub fn user_project_count(&self) -> Result<usize> {
-        Ok(self
-            .workspace
-            .list_projects()?
-            .into_iter()
-            .filter(|entry| entry.name != DEMO_PROJECT_NAME)
-            .count())
     }
 }
 

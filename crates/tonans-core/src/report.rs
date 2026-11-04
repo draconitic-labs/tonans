@@ -62,7 +62,7 @@ pub fn render(input: &ReportInput<'_>) -> Result<String> {
     html.push_str("</head>\n<body>\n<main class=\"page\">\n");
 
     header(&mut html, input);
-    disclaimer_banner(&mut html, run);
+    disclaimer_banner(&mut html);
     warning_ledger(&mut html, &run.all_warnings());
     comparison_table(&mut html, run, currency);
 
@@ -98,7 +98,6 @@ fn header(html: &mut String, input: &ReportInput<'_>) {
 <div><dt>Application</dt><dd>{app}</dd></div>
 <div><dt>Model</dt><dd>{model}</dd></div>
 <div><dt>Schema</dt><dd>v{schema}</dd></div>
-<div><dt>Licence tier</dt><dd>{tier}</dd></div>
 </dl>
 </header>
 "#,
@@ -109,29 +108,16 @@ fn header(html: &mut String, input: &ReportInput<'_>) {
         app = escape(&run.app_version),
         model = escape(&run.model_version),
         schema = run.schema_version,
-        tier = escape(run.tier.label()),
     );
 }
 
-fn disclaimer_banner(html: &mut String, run: &RunResult) {
+fn disclaimer_banner(html: &mut String) {
     let _ = writeln!(
         html,
         r#"<section class="banner" role="note"><strong>Planning estimate.</strong> {disclaimer}</section>"#,
         disclaimer =
             escape(PLANNING_DISCLAIMER.trim_start_matches("Planning estimate for human review. "))
     );
-
-    if !run.client_report_rights {
-        // Not a watermark that pretends to enforce anything. It states the licence
-        // term the artifact was produced under, so nobody can claim they were not
-        // told.
-        let _ = writeln!(
-            html,
-            r#"<section class="banner evaluation" role="note"><strong>{tier} licence.</strong> This report is for internal evaluation. It does not carry client-facing report rights. See TERMS.md, or write to {support}.</section>"#,
-            tier = escape(run.tier.label()),
-            support = escape(SUPPORT_EMAIL)
-        );
-    }
 }
 
 fn warning_ledger(html: &mut String, warnings: &[Warning]) {
@@ -894,7 +880,7 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
     if (economics.annualization_multiplier - 1.0).abs() > 0.01 {
         let _ = writeln!(
             html,
-            "<p class=\"banner evaluation\">Annual figures are the simulated period multiplied by {factor:.3}, because the data set is not a full year. Demand charges and seasonal load do not scale with elapsed time.</p>",
+            "<p class=\"banner caution\">Annual figures are the simulated period multiplied by {factor:.3}, because the data set is not a full year. Demand charges and seasonal load do not scale with elapsed time.</p>",
             factor = economics.annualization_multiplier
         );
     }
@@ -1218,7 +1204,7 @@ p{margin:.6em 0}
 .stamp dt{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-muted)}
 .stamp dd{margin:2px 0 0;font-weight:600;font-size:14px}
 .banner{margin:20px 0;padding:14px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--hairline);border-left:4px solid var(--warning);font-size:14px}
-.banner.evaluation{border-left-color:var(--c-import)}
+.banner.caution{border-left-color:var(--c-import)}
 section{margin-top:8px}
 .scenario{margin-top:34px}
 figure{margin:12px 0 6px;padding:14px;background:var(--surface);border:1px solid var(--hairline);border-radius:10px}

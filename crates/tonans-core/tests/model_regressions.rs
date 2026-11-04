@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 
 use tonans_core::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
 use tonans_core::engine::{self, EngineInput, EngineOptions, EngineResult};
-use tonans_core::licensing::Entitlements;
 use tonans_core::run;
 use tonans_core::schema::{
     BatterySpec, DispatchPolicy, GapPolicy, InverterSpec, OutageWindow, Project, Scenario,
@@ -338,7 +337,7 @@ fn results_hash_ignores_explanatory_prose_but_tracks_numeric_outputs() {
     .unwrap();
     project.dataset = Some(dataset);
 
-    let mut result = run::run_project(&project, Entitlements::evaluation(), start()).unwrap();
+    let mut result = run::run_project(&project, start()).unwrap();
     let original = result.results_hash().unwrap();
     result.scenarios[0].economics.degradation_method = "wording changed only".to_string();
     assert_eq!(result.results_hash().unwrap(), original);

@@ -1,11 +1,10 @@
 # Release checklist - Tonans release candidate
 
-**Status: not published, not for sale, and reserved for operator testing.**
+**Status: no binary release yet.**
 
-The numeric public-reference gate and final integrated automated gates are closed for
-the exact operator-test artifact below. The operator's real-browser DOM walkthrough
-remains pending. Evidence belongs to the exact artifact being considered for release;
-an earlier green run does not bless a later binary.
+The results below belong to the release-candidate archive built before Tonans became open
+source. Evidence belongs to the exact artifact being considered for release, so these gates
+must be rerun against the next package.
 
 Verified 2026-07-13:
 
@@ -17,7 +16,7 @@ Verified 2026-07-13:
 - CycloneDX 1.5 JSON Schema validation passed with the official SPDX and JSF schemas;
 - Grok 4.5 maximum reasoning and an independent fresh-context Codex review both
   returned GO for the exact reviewed source and archive digest; and
-- Authenticode status is intentionally `NotSigned` for this private operator test.
+- Authenticode status is intentionally `NotSigned` for this release candidate.
 
 Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 
@@ -25,21 +24,30 @@ Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 ```
 
-## Pending before publication
+## Pending before a binary release
 
-### Operator browser walkthrough
+### Browser walkthrough
 
-The operator must launch the final staged executable and click through the actual
-DOM workflow:
+Launch the final staged executable and drive the actual DOM workflow:
 
 ```text
 import -> configure -> run -> compare -> sensitivity -> export -> reopen
 ```
 
 Automated tests and the packaged-binary smoke exercise the HTTP boundary and model
-path, but they do not drive the browser DOM. The operator should confirm visible
-units, warnings, source-flow metrics, assumption text, sensitivity results, export
-links, and project reopening. Record the tested package digest when this passes.
+path, but they do not drive the browser DOM. Confirm visible units, warnings,
+source-flow metrics, assumption text, sensitivity results, export links, and project
+reopening. Record the tested package digest when this passes.
+
+Passed 2026-11-03 against a Linux release build of this source, not the Windows package,
+using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through the
+page: all eight columns mapped in the import form, 8,760 intervals imported, three scenarios
+added and saved, four scenarios compared, a 12-cell sensitivity grid run, and a bundle
+exported whose files all pass `SHA256SUMS.txt`, with no script in `report.html`. After
+stopping the server from the UI and restarting, the reopened project reproduced model input
+hash `e20536dfda6e` and project hash `5f98a2f9428a`. No package digest applies to this source
+build. Rerun the walkthrough against the staged Windows package and record its digest before
+publishing a binary.
 
 ### Final integrated gate rerun
 
@@ -124,7 +132,7 @@ The package build must:
   an external archive digest;
 - include the model, security, privacy, benchmark, licence, and support documents;
 - declare the unsigned status; and
-- include no payment integration, live licensing origin, or secret.
+- include no payment integration or secret.
 
 ### Independent package verification
 
@@ -158,32 +166,25 @@ A reviewer who did not implement the final slice must inspect at least:
 - `engine.rs`, `economics.rs`, source attribution, and `docs/MODEL.md` together;
 - CSV/time-grid/project-store/path boundaries;
 - HTTP head/body ordering, deadlines, queue bounds, guards, and response writing;
-- entitlement checks at use time;
 - package contents, PE imports, SBOM/notices/checksums, and sanitized smoke evidence;
-- public claims for parity, determinism, pricing, refund, and licensing scope.
+- public claims for parity and determinism.
 
 Record findings and regressions. A review of code before a subsequent repair is not
 the final review.
 
-## Signing and sales status
+## Signing status
 
 The release candidate is explicitly unsigned. Windows SmartScreen may warn that the
 publisher cannot be confirmed. The archive sidecar and internal checksums provide
 integrity evidence, not publisher authentication.
 
-Sales are disabled. Do not create a Stripe product, enable checkout, embed a live
-licensing origin, or claim a refund policy for this candidate. Before any future
-sale, finalize the legal terms and refund window, exercise purchase/activation/
-recovery/refund/dispute behavior in test mode, and obtain explicit publication
-approval.
-
-## Final operator sequence
+## Final release sequence
 
 1. Verify the archive digest and extract it.
 2. Complete the browser walkthrough above using the exact staged package.
 3. Confirm the boundary text, assumptions, units, warnings, and exports are readable.
 4. Record the package digest and outcome.
-5. Keep Tonans unpublished until every final integrated gate and the manual test are
-   closed.
+5. Keep the binary unpublished until every final integrated gate and the walkthrough
+   are closed.
 
 Support: `support@flintglade.com`

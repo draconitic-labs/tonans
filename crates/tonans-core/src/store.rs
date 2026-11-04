@@ -417,7 +417,7 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
             .map_err(|e| Error::io(format!("flushing {}", temporary.display()), e))?;
         drop(file);
 
-        fs::rename(&temporary, path)
+        replace_file(&temporary, path)
             .map_err(|e| Error::io(format!("replacing {}", path.display()), e))
     })();
 
@@ -428,12 +428,44 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     outcome
 }
 
+/// Rename over `path`, tolerating the moments Windows refuses because another thread or a
+/// scanner holds the target open. Every other platform and error fails at once.
+fn replace_file(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    let mut attempts = 0_u64;
+    loop {
+        match fs::rename(temporary, path) {
+            Err(error)
+                if cfg!(windows)
+                    && attempts < 10
+                    && error.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5 * attempts));
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::schema::Site;
     use chrono::TimeZone;
     use std::sync::{Arc, Barrier};
+
+    /// Windows briefly refuses to open a file while another thread renames over it.
+    fn read_while_replaced(path: &Path) -> Vec<u8> {
+        for _ in 0..50 {
+            match fs::read(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                outcome => return outcome.unwrap(),
+            }
+        }
+        panic!("{} stayed unreadable", path.display());
+    }
 
     fn temp_root(label: &str) -> PathBuf {
         // Inside the crate's own target directory: the test suite never writes
@@ -595,7 +627,7 @@ mod tests {
                 barrier.wait();
                 for _ in 0..20 {
                     write_atomically(&path, &bytes).unwrap();
-                    let observed = fs::read(&*path).unwrap();
+                    let observed = read_while_replaced(&path);
                     assert!(observed == expected_first || observed == expected_second);
                     serde_json::from_slice::<serde_json::Value>(&observed).unwrap();
                 }

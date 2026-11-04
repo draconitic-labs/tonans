@@ -38,6 +38,13 @@ pub const MAX_INTERVAL_MINUTES: u32 = 60;
 /// Largest number of scenarios in one project.
 pub const MAX_SCENARIOS: usize = 32;
 
+/// Largest number of scenarios multiplied by intervals in one run.
+///
+/// Every interval of every scenario is kept in memory and canonicalized for hashing, at
+/// roughly 6 kB per row. This fits 32 scenarios of hourly data, or 4 scenarios of a
+/// five-minute year, in about 2.5 GB.
+pub const MAX_RUN_ROWS: usize = 420_480;
+
 /// Largest number of axes in one sensitivity study.
 pub const MAX_SENSITIVITY_AXES: usize = 2;
 
@@ -102,6 +109,8 @@ pub struct Limits {
     pub max_intervals: usize,
     /// See [`MAX_SCENARIOS`].
     pub max_scenarios: usize,
+    /// See [`MAX_RUN_ROWS`].
+    pub max_run_rows: usize,
     /// See [`MAX_SENSITIVITY_CELLS`].
     pub max_sensitivity_cells: usize,
     /// See [`MAX_OUTAGE_WINDOWS`].
@@ -122,6 +131,7 @@ impl Limits {
             max_csv_columns: MAX_CSV_COLUMNS,
             max_intervals: MAX_INTERVALS,
             max_scenarios: MAX_SCENARIOS,
+            max_run_rows: MAX_RUN_ROWS,
             max_sensitivity_cells: MAX_SENSITIVITY_CELLS,
             max_outage_windows: MAX_OUTAGE_WINDOWS,
             max_horizon_years: MAX_HORIZON_YEARS,

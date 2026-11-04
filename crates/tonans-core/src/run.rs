@@ -22,8 +22,7 @@ use crate::engine::{
     self, CostSummary, EnergySummary, EngineOptions, IntervalRow, OutageResult, ResolvedInput,
 };
 use crate::error::{Error, Result, Warning, WarningLedger};
-use crate::licensing::Entitlements;
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 use crate::schema::{Dataset, DemandPeriods, Project, Scenario, SeriesKind};
 use crate::version::{
     APP_VERSION, MODEL_EXCLUSIONS, MODEL_VERSION, PLANNING_DISCLAIMER, SCHEMA_VERSION,
@@ -123,11 +122,6 @@ pub struct RunResult {
     pub warnings: Vec<Warning>,
     /// The envelope this run was produced inside.
     pub limits: Limits,
-    /// The entitlement tier in force, stamped so a report cannot be separated
-    /// from the terms it was produced under.
-    pub tier: crate::licensing::Tier,
-    /// Whether reports from this run may be given to a third party.
-    pub client_report_rights: bool,
 
     /// The planning-only disclaimer. Present in the data, not merely in the
     /// template, so that a machine-readable export carries it too.
@@ -151,7 +145,7 @@ impl RunResult {
 
     /// Hash of the numeric model outputs. Two runs with the same
     /// [`Self::model_input_hash`] must match, even when presentation metadata,
-    /// entitlement labels, warning prose, or the run time differ.
+    /// warning prose or the run time differ.
     pub fn results_hash(&self) -> Result<Hash> {
         let mut scenarios = Vec::with_capacity(self.scenarios.len());
         for scenario in &self.scenarios {
@@ -279,16 +273,32 @@ fn model_scenarios(scenarios: &[Scenario]) -> Result<Vec<serde_json::Value>> {
     Ok(values)
 }
 
+/// Refuse a run too large to hold in memory, before any of it is simulated.
+fn check_run_size(scenarios: usize, intervals: usize) -> Result<()> {
+    let rows = scenarios.saturating_mul(intervals);
+    if rows > limits::MAX_RUN_ROWS {
+        return Err(Error::limit(
+            "limit.run_rows",
+            limits::MAX_RUN_ROWS as u64,
+            rows as u64,
+            format!(
+                "{scenarios} scenarios of {intervals} intervals is {rows} rows; one run holds up to \
+                 {}. Remove scenarios or use coarser data.",
+                limits::MAX_RUN_ROWS
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Run every scenario in `project`.
 ///
 /// `now_utc` is injected; this crate has no clock.
-pub fn run_project(
-    project: &Project,
-    entitlements: Entitlements,
-    now_utc: DateTime<Utc>,
-) -> Result<RunResult> {
-    entitlements.check_scenario_count(project.scenarios.len())?;
+pub fn run_project(project: &Project, now_utc: DateTime<Utc>) -> Result<RunResult> {
     let grid = project.validate_runnable()?;
+    if let Some(dataset) = &project.dataset {
+        check_run_size(project.scenarios.len(), dataset.interval_count)?;
+    }
 
     let baseline_spec = project.baseline().ok_or_else(|| {
         Error::validation(
@@ -404,9 +414,20 @@ pub fn run_project(
         scenarios,
         warnings: project_ledger.into_sorted(),
         limits: Limits::current(),
-        tier: entitlements.tier,
-        client_report_rights: entitlements.client_report_rights,
         disclaimer: PLANNING_DISCLAIMER.to_string(),
         model_exclusions: MODEL_EXCLUSIONS.iter().map(|s| (*s).to_string()).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_is_bounded_by_scenarios_times_intervals() {
+        assert!(check_run_size(limits::MAX_SCENARIOS, 8_760).is_ok());
+        assert!(check_run_size(4, limits::MAX_INTERVALS).is_ok());
+        let error = check_run_size(limits::MAX_SCENARIOS, limits::MAX_INTERVALS).unwrap_err();
+        assert_eq!(error.code(), "limit.run_rows");
+    }
 }

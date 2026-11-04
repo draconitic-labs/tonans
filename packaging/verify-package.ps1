@@ -40,8 +40,7 @@ $OutDir = Join-Path $PSScriptRoot 'out'
 $Payload = @(
     'Tonans.exe'
     'README.md'
-    'LICENSE.md'
-    'TERMS.md'
+    'LICENSE'
     'NOTICES.md'
     'PRIVACY.md'
     'SECURITY.md'
@@ -199,8 +198,7 @@ try {
     # 4. No test secrets, live origins, or payment integration
     # -----------------------------------------------------------------------
     Check 'no payment integration or test secret reached the artifact' {
-        # Sales are disabled in this build by design. A Stripe key or endpoint in a
-        # shipped artifact would mean that stopped being true.
+        # Tonans has no payment integration. A Stripe key or endpoint here would be a mistake.
         $forbidden = @(
             'stripe', 'sk_live_', 'sk_test_', 'pk_live_', 'pk_test_',
             'BEGIN PRIVATE KEY', 'BEGIN RSA PRIVATE KEY', 'AKIA', 'xoxb-'
@@ -219,7 +217,7 @@ try {
         # The threat is a document of ours pointing a user at a live origin: an
         # analytics endpoint, an update server, a licensing host, a payment page.
         #
-        # NOTICES.md is excluded, and the exclusion is the honest one: its URLs are
+        # NOTICES.md and LICENSE are excluded, and the exclusion is the honest one: their URLs are
         # inside the verbatim text of the Apache-2.0 and MIT licences. Editing a URL
         # out of a licence to satisfy a scanner would alter the licence, which is a
         # worse thing to do than the thing this check exists to prevent.
@@ -227,7 +225,7 @@ try {
         # The binary is excluded too, and for a real reason: it legitimately contains
         # the string "http://" because it formats its own loopback URL. The
         # loopback-only claim is checked separately, below.
-        $ours = @($textFiles | Where-Object { $_.Name -ne 'NOTICES.md' })
+        $ours = @($textFiles | Where-Object { $_.Name -notin @('NOTICES.md', 'LICENSE') })
         $offenders = @()
         foreach ($file in $ours) {
             $content = Get-Content $file.FullName -Raw
@@ -365,8 +363,8 @@ try {
         $rootLicenses = @($root.licenses)
         if ($rootLicenses.Count -ne 1 -or
             -not ($rootLicenses[0].PSObject.Properties.Name -contains 'expression') -or
-            $rootLicenses[0].expression -ne 'LicenseRef-Flintglade-Tonans-Commercial') {
-            $problems += 'root license is not the commercial LicenseRef expression'
+            $rootLicenses[0].expression -ne 'Apache-2.0') {
+            $problems += 'root license is not Apache-2.0'
         }
 
         if (@($bom.components).Count -lt 10) { $problems += "only $(@($bom.components).Count) components -- the tree is bigger than that" }
@@ -419,8 +417,6 @@ try {
         $problems = @()
         if ($readme -notmatch '(?i)unsigned') { $problems += 'README.md does not say the binary is unsigned' }
         if ($readme -notmatch '(?i)planning estimate') { $problems += 'README.md does not carry the planning-estimate boundary' }
-        $terms = Get-Content (Join-Path $work 'TERMS.md') -Raw
-        if ($terms -notmatch '(?i)not enabled|sales are not') { $problems += 'TERMS.md does not say sales are not enabled' }
         if ($problems) { $problems -join '; ' }
     }
 

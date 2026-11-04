@@ -179,17 +179,9 @@ async function boot() {
   if (!session) return;
   state.session = session;
 
-  document.getElementById('tier-badge').textContent = `${session.tier} tier`;
   document.getElementById('version-badge').textContent =
     `v${session.app_version} · model ${session.model_version} · schema v${session.schema_version}`;
   document.getElementById('workspace-path').textContent = session.workspace;
-
-  const limits = session.entitlements;
-  document.getElementById('entitlement-note').textContent =
-    `${session.tier} tier: ${limits.max_user_projects ?? 'unlimited'} user project(s), ` +
-    `${limits.max_scenarios_per_project ?? 'unlimited'} scenarios each, ` +
-    `${limits.max_sensitivity_cells} sensitivity cells. ` +
-    `The bundled demonstration project does not count against this.`;
 
   document.getElementById('quit').addEventListener('click', async () => {
     await guard(() => api('/api/shutdown', { method: 'POST' }));
@@ -254,14 +246,18 @@ async function openProject(name) {
   document.getElementById('tabs').classList.remove('hidden');
   document.getElementById('project-name').textContent = project.name;
 
+  renderProjectSummary(project);
+
+  await refreshProjects();
+  show(project.dataset ? 'scenarios' : 'data');
+}
+
+function renderProjectSummary(project) {
   const dataset = project.dataset;
   document.getElementById('project-summary').textContent = dataset
     ? `${dataset.interval_count.toLocaleString()} intervals of ${dataset.interval_minutes}-minute data · ` +
       `${project.site.timezone} · ${project.scenarios.length} scenario(s) · imported from ${dataset.source.filename}`
     : `${project.site.timezone} · no data imported yet`;
-
-  await refreshProjects();
-  show(dataset ? 'scenarios' : 'data');
 }
 
 function show(view) {
@@ -290,7 +286,13 @@ async function saveProject() {
     state.run = null;
     state.study = null;
     state.studyRequest = null;
+    state.bundle = null;
+    renderProjectSummary(saved);
+    // The inputs on screen are bound to the object just replaced. Redraw them, or the
+    // next edit changes that old object and the next save silently drops it.
+    show(state.view);
     toast('Saved. Re-run to refresh results.', null, true);
+    await refreshProjects();
   }
   return saved;
 }
@@ -540,9 +542,9 @@ function renderScenarios() {
     'optimal result.' }));
 
   const controls = el('div', { class: 'row', style: { marginTop: '10px' } });
-  const max = state.session.entitlements.max_scenarios_per_project;
+  const max = state.session.limits.max_scenarios;
   const add = el('button', { type: 'button', text: '+ Add scenario' });
-  add.disabled = max !== null && project.scenarios.length >= max;
+  add.disabled = project.scenarios.length >= max;
   add.addEventListener('click', () => {
     const id = `scenario-${project.scenarios.length + 1}`;
     const template = structuredClone(project.scenarios.find((s) => s.battery) || project.scenarios[0]);
@@ -562,9 +564,9 @@ function renderScenarios() {
     renderScenarios();
   });
   controls.appendChild(add);
-  if (max !== null && project.scenarios.length >= max) {
+  if (project.scenarios.length >= max) {
     controls.appendChild(el('span', { class: 'tiny muted', text:
-      `The ${state.session.tier} tier runs ${max} scenarios per project.` }));
+      `A project holds up to ${max} scenarios.` }));
   }
   const save = el('button', { class: 'primary', type: 'button', text: 'Save project' });
   save.addEventListener('click', () => guard(saveProject));
@@ -1509,7 +1511,7 @@ function renderSensitivity() {
   card.appendChild(el('h3', { text: 'Sensitivity' }));
   card.appendChild(el('p', { class: 'muted', text:
     `Every cell is a full simulation of the whole data set, not an interpolation — which is why the ` +
-    `grid is bounded. Your tier runs up to ${state.session.entitlements.max_sensitivity_cells} cells.` }));
+    `grid is bounded at ${state.session.limits.max_sensitivity_cells} cells.` }));
 
   const scenarioPick = select('sens-scenario',
     state.project.scenarios.map((s) => [s.id, s.name]),
@@ -1639,12 +1641,6 @@ function renderExport() {
     'A self-contained HTML report with no script and no network access, the full results as JSON, ' +
     'every interval as CSV, a provenance manifest with the input hashes, and a SHA-256 checksum of ' +
     'every file. Written into your workspace folder.' }));
-
-  if (!state.session.entitlements.client_report_rights) {
-    card.appendChild(el('div', { class: 'banner', text:
-      `The ${state.session.tier} tier does not carry client-facing report rights. Exported reports ` +
-      'say so on their first page. See TERMS.md.' }));
-  }
 
   const go = el('button', { class: 'primary', type: 'button', text: 'Export bundle' });
   go.addEventListener('click', async () => {
