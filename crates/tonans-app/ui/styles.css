@@ -36,6 +36,7 @@ html, body { height: 100%; }
 body {
   margin: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   background: var(--page);
@@ -57,6 +58,7 @@ h3 { margin: 0 0 4px; font-size: 18px; line-height: 1.25; }
 h4 { margin: 18px 0 6px; font-size: 15px; }
 p { margin: 0 0 8px; max-width: 78ch; }
 
+a { color: var(--c-load); }
 :focus-visible { outline: 2px solid var(--c-load); outline-offset: 1px; }
 
 /* ---------------------------------------------------------------- top bar */
@@ -284,9 +286,9 @@ table.diff thead button:hover { text-decoration: underline; }
  * Bars inside a table: one row per scenario, one column per measure, so a reader can
  * compare across and down without a legend. The tick is the baseline's value.
  */
-table.lens th, table.lens td { padding: 7px 10px; vertical-align: top; border-bottom: 1px solid var(--hairline); }
-table.lens td.measure { min-width: 118px; }
-table.lens .lens-name { font-weight: 500; overflow-wrap: anywhere; min-width: 140px; }
+table.lens th, table.lens td { padding: 7px 8px; vertical-align: top; border-bottom: 1px solid var(--hairline); }
+table.lens td.measure { min-width: 104px; }
+table.lens .lens-name { font-weight: 500; overflow-wrap: anywhere; min-width: 120px; }
 table.lens .lens-policy { display: block; font-size: 12.5px; font-weight: 400; color: var(--ink-secondary); }
 .lens-value { display: block; text-align: right; font-weight: 500; white-space: nowrap; }
 .lens-delta { display: block; text-align: right; font-size: 12.5px; color: var(--ink-secondary); white-space: nowrap; }

@@ -300,7 +300,18 @@ async function boot() {
   path.title = session.workspace;
 
   const quit = document.getElementById('quit');
-  if (state.desktop) quit.textContent = 'Quit';
+  if (state.desktop) {
+    quit.textContent = 'Quit';
+    // A reload starts from what is saved, so the shell has nothing left to ask about.
+    shell('set_unsaved', { unsaved: false }).catch(() => {});
+    // The webview's own menu offers Back and Reload, which mean nothing in an application
+    // and would drop unsaved edits. Text fields and selected text keep theirs: copy, paste.
+    document.addEventListener('contextmenu', (event) => {
+      const target = event.target;
+      const editable = target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      if (!editable && !window.getSelection()?.toString()) event.preventDefault();
+    });
+  }
   quit.addEventListener('click', quitApp);
   document.getElementById('save').addEventListener('click', () => guard(saveProject));
   document.getElementById('undo').addEventListener('click', undo);
@@ -532,9 +543,6 @@ function nextStep() {
     return { text: 'Add a candidate to compare with the baseline.', label: 'Add a scenario', run: addScenario };
   }
   if (!state.run) return { text: 'Run every scenario over every interval.', label: 'Run all scenarios', run: runAll };
-  if (state.view !== 'results' && !state.study && !state.bundle) {
-    return { text: 'Results are current.', label: 'Compare results', run: () => show('results') };
-  }
   if (state.view === 'sensitivity' && !state.study && !state.bundle) {
     return { text: 'Choose what to vary and run the study, or go straight to export.',
              label: 'Go to export', run: () => show('export') };
@@ -542,6 +550,9 @@ function nextStep() {
   if (!state.study && !state.bundle && state.view === 'results') {
     return { text: 'Test how the results move with size, price, or reserve, or go straight to export.',
              label: 'Open sensitivity', run: () => show('sensitivity') };
+  }
+  if (!state.study && !state.bundle && state.view !== 'export') {
+    return { text: 'Results are current.', label: 'Compare results', run: () => show('results') };
   }
   if (!state.bundle) {
     return state.view === 'export'
@@ -1464,9 +1475,11 @@ function numberField(obj, key, editKey, step = 'any') {
     const raw = input.value.trim();
     if (raw === '' || !Number.isFinite(Number(raw))) {
       input.setAttribute('aria-invalid', 'true');
+      input.title = 'Enter a number. A blank is not saved as 0.';
       return;
     }
     input.removeAttribute('aria-invalid');
+    input.removeAttribute('title');
     recordEdit(editKey, 'edit a value', () => { obj[key] = Number(raw); });
   });
   return input;
@@ -2912,7 +2925,7 @@ function peakChart(run, s, window) {
   }
   const over = ceiling !== null && window.peak_kw > ceiling + 1e-6;
   const note = `This scenario's peak is ${fmt.kw(window.peak_kw)}, at ${fmt.when(window.peak_utc)} at the site.` +
-    (over ? ' It is above the ceiling, so the battery could not hold it there: it ran out of energy or power first.' : '') +
+    (over ? ' It is above the ceiling, so the battery could not hold it there: it reached its reserve floor or its power limit first.' : '') +
     ' Every interval in this window is shown.';
   return chartBlock(timeline, panels, note, fmt.dayHour);
 }
@@ -2992,7 +3005,7 @@ function drawPanels(canvas, tip, crosshair, timeline, panels, tickFormat) {
     }
     ctx.fillStyle = muted;
     ctx.textAlign = 'right';
-    ctx.fillText(panel.unit, marginLeft - 6, top - 6);
+    ctx.fillText(panel.unit, marginLeft - 6, top - 9);
 
     // Outage shading, so a reader can see which part of the year is islanded.
     ctx.fillStyle = css('--c-unmet');
@@ -3266,11 +3279,15 @@ function renderSensitivity() {
 
   const go = el('button', { class: 'primary', type: 'button', text: state.busy ? 'Running…' : 'Run sensitivity', onclick: () => runStudy() });
   go.disabled = state.busy;
-  const cells = (parseValues(settings.v1).values.length || 0) * (settings.p2 ? (parseValues(settings.v2).values.length || 0) : 1);
-  box.appendChild(el('div', { class: 'row' }, [
-    go,
-    el('span', { class: 'tiny muted', text: `${cells} cell${cells === 1 ? '' : 's'}.` }),
-  ]));
+  const count = el('span', { class: 'tiny muted' });
+  const countCells = () => {
+    const cells = parseValues(settings.v1).values.length * (settings.p2 ? parseValues(settings.v2).values.length : 1);
+    count.textContent = `${cells} cell${cells === 1 ? '' : 's'}.`;
+  };
+  countCells();
+  values1.addEventListener('input', countCells);
+  values2.addEventListener('input', countCells);
+  box.appendChild(el('div', { class: 'row' }, [go, count]));
   root.appendChild(box);
 
   if (!state.study) return;
@@ -3501,7 +3518,9 @@ function heatTable(study, metric) {
     el('div', { class: 'scroll' }, table),
     el('p', { class: 'chart-note', text:
       `${metric.title} in ${metric.unit}. Every cell was simulated in full. ` +
-      `The outlined cell${best.cells.length === 1 ? ' is' : 's are'} the ${metric.better === 'high' ? 'highest' : 'lowest'} of those tested.` +
+      (best.varies
+        ? `The outlined cell${best.cells.length === 1 ? ' is' : 's are'} the ${metric.better === 'high' ? 'highest' : 'lowest'} of those tested.`
+        : 'No cell stands out on this measure.') +
       (study.capex_usd_per_kwh !== undefined
         ? ` Installed cost moved with battery energy at ${study.capex_usd_per_kwh} USD per kWh.` : '') }),
   ]);

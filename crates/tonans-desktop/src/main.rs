@@ -233,8 +233,13 @@ fn reveal_bundle(
     let workspace = &shell.server.workspace;
     // Proves the bundle exists, and validates both names, before anything is created.
     workspace.read_export(&project, &key, "provenance.json")?;
-    let report = workspace.export_dir(&project, &key)?.join("report.html");
-    tauri_plugin_opener::reveal_item_in_dir(&report)
+    let directory = workspace.export_dir(&project, &key)?;
+    // Selecting the file needs the desktop's file-manager service, which not every desktop
+    // has. Opening the folder is the next best thing and needs only its default handler.
+    if tauri_plugin_opener::reveal_item_in_dir(directory.join("report.html")).is_ok() {
+        return Ok(());
+    }
+    tauri_plugin_opener::open_path(&directory, None::<&str>)
         .map_err(|e| CommandError::new("desktop.reveal_failed", e.to_string()))
 }
 

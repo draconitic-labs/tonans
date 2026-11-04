@@ -48,6 +48,9 @@ discarded when the import completes or you abandon it. The file you selected is
 never copied into the workspace; only the data you actually imported, and a SHA-256
 digest of the bytes it came from, is stored.
 
+On Linux, the system's file dialogs add a file you choose to your desktop's list of recent
+files, as they do for any program. Tonans does not read that list.
+
 Project and export writes from the interface stay in the workspace. The desktop window
 can also save a copy of an export wherever you choose in a save dialog, and the headless
 CLI can write one to the directory you explicitly choose with `--out`; those copies are
