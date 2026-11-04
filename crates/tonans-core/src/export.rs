@@ -660,6 +660,7 @@ mod tests {
                     param: SensitivityParam::CapexUsd,
                     values: vec![capex],
                 }],
+                capex_usd_per_kwh: None,
             },
         )
         .unwrap()
@@ -826,6 +827,9 @@ mod tests {
             serde_json::from_slice(&fs::read(study_directory.join("provenance.json")).unwrap())
                 .unwrap();
         assert_eq!(provenance.sensitivity_studies.len(), 2);
+        // A study's warnings change how its numbers read, so the report carries them.
+        let report = fs::read_to_string(study_directory.join("report.html")).unwrap();
+        assert!(report.contains("sensitivity.per_cell_simulation"));
         let checksum_lines = fs::read_to_string(study_directory.join("SHA256SUMS.txt"))
             .unwrap()
             .lines()

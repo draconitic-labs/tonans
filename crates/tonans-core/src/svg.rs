@@ -197,6 +197,30 @@ pub fn palette_css() -> String {
     css
 }
 
+/// The heat-map ramps and the two inks that sit on a filled mark, as custom properties.
+///
+/// Separate from [`palette_css`] because only the live UI reads them: the exported
+/// report writes its ramp colours inline, and its bytes should not move for this.
+#[must_use]
+pub fn ramp_css() -> String {
+    let mut css = String::from(":root{--on-fill-light:#ffffff;--on-fill-dark:#0b0b0b;");
+    for (index, colour) in palette::SEQUENTIAL.iter().enumerate() {
+        let _ = write!(css, "--seq-{index}:{colour};");
+    }
+    for (index, colour) in palette::DIVERGING_NEGATIVE.iter().enumerate() {
+        let _ = write!(css, "--div-neg-{index}:{colour};");
+    }
+    for (index, colour) in palette::DIVERGING_POSITIVE.iter().enumerate() {
+        let _ = write!(css, "--div-pos-{index}:{colour};");
+    }
+    let (light, dark) = palette::DIVERGING_MID;
+    let _ = write!(
+        css,
+        "--div-mid:{light};}}@media (prefers-color-scheme:dark){{:root{{--div-mid:{dark};}}}}"
+    );
+    css
+}
+
 // ---------------------------------------------------------------------------
 // Escaping
 // ---------------------------------------------------------------------------
@@ -1108,6 +1132,23 @@ mod tests {
                 "the sequential ramp is not monotonically darkening: {pair:?}"
             );
         }
+    }
+
+    #[test]
+    fn ramp_css_carries_every_ramp_step_and_leaves_the_report_palette_alone() {
+        let css = ramp_css();
+        for index in 0..palette::SEQUENTIAL.len() {
+            assert!(css.contains(&format!("--seq-{index}:")));
+        }
+        for index in 0..palette::DIVERGING_POSITIVE.len() {
+            assert!(css.contains(&format!("--div-pos-{index}:")));
+            assert!(css.contains(&format!("--div-neg-{index}:")));
+        }
+        assert!(css.contains("--div-mid:"));
+        assert!(
+            !palette_css().contains("--seq-"),
+            "the report does not read these"
+        );
     }
 
     #[test]

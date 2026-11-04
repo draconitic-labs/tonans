@@ -979,14 +979,16 @@ impl TimestampTracker {
     }
 }
 
+/// The naive timestamp formats the importer accepts.
+const NAIVE_FORMATS: &[&str] = &[
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%Y-%m-%d %H:%M",
+];
+
 fn parse_naive(raw: &str, line: u64) -> Result<NaiveDateTime> {
-    const FORMATS: &[&str] = &[
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d %H:%M",
-    ];
-    for format in FORMATS {
+    for format in NAIVE_FORMATS {
         if let Ok(naive) = NaiveDateTime::parse_from_str(raw, format) {
             return Ok(naive);
         }
@@ -998,9 +1000,347 @@ fn parse_naive(raw: &str, line: u64) -> Result<NaiveDateTime> {
         format!(
             "'{raw}' is not a timestamp Tonans understands. Use RFC 3339 with an offset \
              (2024-01-01T00:00:00-05:00), which is unambiguous, or one of: {}.",
-            FORMATS.join(", ")
+            NAIVE_FORMATS.join(", ")
         ),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Mapping suggestions
+// ---------------------------------------------------------------------------
+
+/// One column's suggested meaning.
+///
+/// A suggestion is something the user asked for and then reviews. The importer never
+/// sees one: it still reads only the mapping the user confirms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ColumnSuggestion {
+    /// The column, verbatim.
+    pub header: String,
+    /// `timestamp`, `demand_period`, or a series name such as `critical_load`.
+    pub role: String,
+    /// The unit, only when something in the file states it.
+    pub unit: Option<ImportUnit>,
+    /// What in the file led to this suggestion.
+    pub reason: String,
+    /// What the file could not settle, for the user to check.
+    pub check: Option<String>,
+}
+
+/// What [`suggest_mapping`] found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MappingSuggestion {
+    /// Columns with a suggested meaning, in file order.
+    pub columns: Vec<ColumnSuggestion>,
+    /// The spacing of the first two timestamps, if it is a legal interval.
+    pub interval_minutes: Option<u32>,
+    /// Columns left for the user, and why.
+    pub notes: Vec<String>,
+}
+
+/// Suggest a mapping from a file's headers and first rows.
+///
+/// Called only when the user asks, and every suggestion carries its reason, because
+/// the rule that matters is that Tonans never guesses *silently*. A unit is suggested
+/// only if the file states it, with one flagged exception: a price per kWh with no
+/// currency is read by size as dollars or cents, and says that it was.
+#[must_use]
+pub fn suggest_mapping(preview: &CsvPreview) -> MappingSuggestion {
+    let mut candidates: Vec<ColumnSuggestion> = Vec::new();
+    let mut notes = Vec::new();
+
+    for (index, header) in preview.headers.iter().enumerate() {
+        let samples: Vec<&str> = preview
+            .sample_rows
+            .iter()
+            .filter_map(|row| row.get(index))
+            .map(|cell| cell.trim())
+            .collect();
+        match classify_column(header, &samples) {
+            Some(candidate) => candidates.push(candidate),
+            None => notes.push(format!(
+                "Nothing in '{}' says what it means. Choose a meaning, or ignore it.",
+                header.trim()
+            )),
+        }
+    }
+
+    // Two columns claiming one role is a question only the user can answer.
+    let mut columns = Vec::with_capacity(candidates.len());
+    for candidate in &candidates {
+        let rivals: Vec<&str> = candidates
+            .iter()
+            .filter(|other| other.role == candidate.role)
+            .map(|other| other.header.trim())
+            .collect();
+        if rivals.len() == 1 {
+            columns.push(candidate.clone());
+        } else if rivals[0] == candidate.header.trim() {
+            notes.push(format!(
+                "{} could each be {}. Tonans left them for you to choose.",
+                rivals
+                    .iter()
+                    .map(|header| format!("'{header}'"))
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                role_phrase(&candidate.role)
+            ));
+        }
+    }
+
+    let interval_minutes = columns
+        .iter()
+        .find(|column| column.role == "timestamp")
+        .and_then(|column| preview.headers.iter().position(|h| *h == column.header))
+        .and_then(|index| first_interval_minutes(&preview.sample_rows, index));
+
+    MappingSuggestion {
+        columns,
+        interval_minutes,
+        notes,
+    }
+}
+
+fn role_phrase(role: &str) -> &'static str {
+    match role {
+        "timestamp" => "the timestamp",
+        "demand_period" => "the demand-charge period",
+        "load" => "the load",
+        "critical_load" => "the critical load",
+        "generation" => "the generation",
+        "import_price" => "the import price",
+        "export_price" => "the export credit",
+        _ => "the temperature",
+    }
+}
+
+/// The header's words, lowercased. `Load (kW)`, `load_kW`, and `loadKw` all give
+/// `load` and `kw`. `$` and `¢` become words so that `$/kWh` reads as a currency.
+fn header_words(header: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for raw in header
+        .replace('$', " usd ")
+        .replace('¢', " cents ")
+        .split(|c: char| !c.is_alphanumeric())
+    {
+        if raw.is_empty() {
+            continue;
+        }
+        let lower = raw.to_lowercase();
+        // `kW` and friends must survive the camelCase split below.
+        if matches!(lower.as_str(), "kw" | "kwh" | "mw" | "mwh" | "wh") {
+            words.push(lower);
+            continue;
+        }
+        let mut current = String::new();
+        let mut previous_lower = false;
+        for c in raw.chars() {
+            if c.is_uppercase() && previous_lower {
+                words.push(std::mem::take(&mut current).to_lowercase());
+            }
+            previous_lower = c.is_lowercase();
+            current.push(c);
+        }
+        words.push(current.to_lowercase());
+    }
+    words
+}
+
+fn parses_as_timestamp(raw: &str) -> bool {
+    DateTime::parse_from_rfc3339(raw).is_ok()
+        || NAIVE_FORMATS
+            .iter()
+            .any(|format| NaiveDateTime::parse_from_str(raw, format).is_ok())
+}
+
+/// The minutes between the first two values of a timestamp column, if legal.
+fn first_interval_minutes(rows: &[Vec<String>], index: usize) -> Option<u32> {
+    let instant = |row: &Vec<String>| -> Option<NaiveDateTime> {
+        let raw = row.get(index)?.trim();
+        if let Ok(fixed) = DateTime::parse_from_rfc3339(raw) {
+            return Some(fixed.naive_utc());
+        }
+        NAIVE_FORMATS
+            .iter()
+            .find_map(|format| NaiveDateTime::parse_from_str(raw, format).ok())
+    };
+    let first = instant(rows.first()?)?;
+    let second = instant(rows.get(1)?)?;
+    let minutes = u32::try_from((second - first).num_minutes()).ok()?;
+    (limits::MIN_INTERVAL_MINUTES..=limits::MAX_INTERVAL_MINUTES)
+        .contains(&minutes)
+        .then_some(minutes)
+}
+
+fn classify_column(header: &str, samples: &[&str]) -> Option<ColumnSuggestion> {
+    let words = header_words(header);
+    let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
+    let shown = header.trim();
+    let suggestion = |role: &str, unit, reason: String, check| ColumnSuggestion {
+        header: header.to_string(),
+        role: role.to_string(),
+        unit,
+        reason,
+        check,
+    };
+
+    // The values settle this one, and the importer reads the same formats.
+    if samples
+        .first()
+        .is_some_and(|first| parses_as_timestamp(first))
+    {
+        return Some(suggestion(
+            "timestamp",
+            None,
+            format!("Its first value, {}, reads as a timestamp.", samples[0]),
+            None,
+        ));
+    }
+
+    let money = has(&[
+        "price", "rate", "tariff", "cost", "credit", "usd", "dollar", "dollars", "cents",
+    ]);
+    if money && has(&["demand", "charge", "charges", "fixed"]) {
+        // A demand charge is USD per kW, not an energy price. Tonans asks for those on
+        // the tariff, not in a column.
+        return None;
+    }
+    if money {
+        let (role, phrase, check) = if has(&["export", "sell", "sold", "feed", "feedin", "credit"])
+        {
+            ("export_price", "an export credit", None)
+        } else if has(&["import", "buy", "purchase", "purchased", "retail"]) {
+            ("import_price", "an import price", None)
+        } else {
+            (
+                "import_price",
+                "a price",
+                Some("It does not say import or export. It is suggested as the import price; check that.".to_string()),
+            )
+        };
+        let (unit, unit_check) = price_unit(&words, samples);
+        let check = match (check, unit_check) {
+            (Some(a), Some(b)) => Some(format!("{a} {b}")),
+            (a, b) => a.or(b),
+        };
+        return Some(suggestion(
+            role,
+            unit,
+            format!("The header '{shown}' names {phrase}."),
+            check,
+        ));
+    }
+
+    if has(&["period", "tou", "season"]) && samples.iter().all(|cell| cell.parse::<f64>().is_err())
+    {
+        return Some(suggestion(
+            "demand_period",
+            None,
+            format!("The header '{shown}' names a period, and its values are labels."),
+            None,
+        ));
+    }
+    if has(&["temperature", "temp", "ambient", "oat"]) {
+        let unit = if has(&["c", "celsius", "degc"]) {
+            Some(ImportUnit::Celsius)
+        } else if has(&["f", "fahrenheit", "degf"]) {
+            Some(ImportUnit::Fahrenheit)
+        } else {
+            None
+        };
+        return Some(suggestion(
+            "temperature",
+            unit,
+            format!("The header '{shown}' names a temperature."),
+            None,
+        ));
+    }
+
+    let (role, phrase) = if has(&["critical", "essential", "backup"]) {
+        ("critical_load", "a critical load")
+    } else if has(&[
+        "pv",
+        "solar",
+        "photovoltaic",
+        "generation",
+        "generator",
+        "gen",
+        "wind",
+        "renewable",
+        "renewables",
+    ]) {
+        ("generation", "on-site generation")
+    } else if has(&["load", "consumption", "usage", "demand"]) {
+        ("load", "a load")
+    } else {
+        return None;
+    };
+    let check = has(&["net"]).then(|| {
+        "'Net' may mean generation was already subtracted. Mapping it as load while also \
+         mapping generation would count the generation twice."
+            .to_string()
+    });
+    Some(suggestion(
+        role,
+        power_unit(&words),
+        format!("The header '{shown}' names {phrase}."),
+        check,
+    ))
+}
+
+fn power_unit(words: &[String]) -> Option<ImportUnit> {
+    let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
+    let found: Vec<ImportUnit> = [
+        (has(&["kw", "kilowatt", "kilowatts"]), ImportUnit::Kilowatt),
+        (has(&["w", "watt", "watts"]), ImportUnit::Watt),
+        (has(&["mw", "megawatt", "megawatts"]), ImportUnit::Megawatt),
+        (has(&["kwh"]), ImportUnit::KilowattHourPerInterval),
+        (has(&["wh"]), ImportUnit::WattHourPerInterval),
+    ]
+    .into_iter()
+    .filter_map(|(present, unit)| present.then_some(unit))
+    .collect();
+    // Two units in one header is not a statement of either.
+    match found.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
+/// A price's unit, and anything about it the user must check.
+fn price_unit(words: &[String], samples: &[&str]) -> (Option<ImportUnit>, Option<String>) {
+    let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
+    if has(&["mwh"]) {
+        return (
+            has(&["usd", "dollar", "dollars"]).then_some(ImportUnit::UsdPerMegawattHour),
+            None,
+        );
+    }
+    if !has(&["kwh"]) {
+        return (None, None);
+    }
+    if has(&["cents", "c", "ct"]) {
+        return (Some(ImportUnit::CentsPerKilowattHour), None);
+    }
+    if has(&["usd", "dollar", "dollars"]) {
+        return (Some(ImportUnit::UsdPerKilowattHour), None);
+    }
+    // The header says per kWh and no more. Say so, and read the size of the number.
+    let Some(first) = samples.iter().find_map(|cell| cell.parse::<f64>().ok()) else {
+        return (None, None);
+    };
+    let (unit, reading) = if first.abs() < 2.0 {
+        (ImportUnit::UsdPerKilowattHour, "dollars")
+    } else {
+        (ImportUnit::CentsPerKilowattHour, "cents")
+    };
+    (
+        Some(unit),
+        Some(format!(
+            "The header gives no currency. The first value, {first}, reads as {reading} per kWh \
+             by its size alone; check that against a bill."
+        )),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1837,6 +2177,134 @@ mod tests {
         );
         let report = import(csv.as_bytes(), &request, now()).unwrap();
         assert!((report.dataset.series[&SeriesKind::ImportPrice].values[0] + 0.02).abs() < 1e-12);
+    }
+
+    fn suggest(csv: &str) -> MappingSuggestion {
+        suggest_mapping(&preview(csv.as_bytes()).unwrap())
+    }
+
+    fn suggested<'a>(found: &'a MappingSuggestion, header: &str) -> Option<&'a ColumnSuggestion> {
+        found.columns.iter().find(|c| c.header == header)
+    }
+
+    #[test]
+    fn suggestions_read_the_bundled_sample_correctly_and_flag_the_currency() {
+        let csv = "timestamp,load_kw,critical_load_kw,pv_kw,import_price_per_kwh,export_price_per_kwh,demand_period,ambient_c\n\
+                   2024-01-01T00:00:00-05:00,52.67,16.69,0.00,0.0980,0.0410,off-peak,-2.2\n\
+                   2024-01-01T01:00:00-05:00,53.51,18.81,0.00,0.0980,0.0410,off-peak,-4.4\n";
+        let found = suggest(csv);
+        let role = |h: &str| suggested(&found, h).unwrap().role.as_str();
+        let unit = |h: &str| suggested(&found, h).unwrap().unit;
+
+        assert_eq!(role("timestamp"), "timestamp");
+        assert_eq!(role("load_kw"), "load");
+        assert_eq!(unit("load_kw"), Some(ImportUnit::Kilowatt));
+        assert_eq!(role("critical_load_kw"), "critical_load");
+        assert_eq!(role("pv_kw"), "generation");
+        assert_eq!(role("import_price_per_kwh"), "import_price");
+        assert_eq!(role("export_price_per_kwh"), "export_price");
+        assert_eq!(role("demand_period"), "demand_period");
+        assert_eq!(role("ambient_c"), "temperature");
+        assert_eq!(unit("ambient_c"), Some(ImportUnit::Celsius));
+        assert_eq!(found.interval_minutes, Some(60));
+        assert!(found.notes.is_empty(), "{:?}", found.notes);
+
+        // No currency in the header: the suggestion must say it read the number's size.
+        let price = suggested(&found, "import_price_per_kwh").unwrap();
+        assert_eq!(price.unit, Some(ImportUnit::UsdPerKilowattHour));
+        assert!(price.check.as_deref().unwrap().contains("no currency"));
+    }
+
+    #[test]
+    fn a_unit_is_suggested_only_when_the_file_states_it() {
+        let found = suggest("Timestamp,Load,Solar (kW),Site Demand kWh\n2024-01-01 00:00,1,2,3\n");
+        assert_eq!(found.columns.len(), 2, "{found:?}");
+        // 'Load' and 'Site Demand kWh' both claim the load, so neither is suggested.
+        assert!(suggested(&found, "Load").is_none());
+        assert!(suggested(&found, "Site Demand kWh").is_none());
+        assert!(found
+            .notes
+            .iter()
+            .any(|n| n.contains("'Load' and 'Site Demand kWh'")));
+        assert_eq!(
+            suggested(&found, "Solar (kW)").unwrap().unit,
+            Some(ImportUnit::Kilowatt)
+        );
+
+        // A role with no stated unit keeps the role and leaves the unit for the user.
+        let found = suggest("t,load\n2024-01-01T00:00:00Z,1\n");
+        assert_eq!(suggested(&found, "load").unwrap().role, "load");
+        assert_eq!(suggested(&found, "load").unwrap().unit, None);
+    }
+
+    #[test]
+    fn unit_spellings_are_read_from_the_header() {
+        let unit = |header: &str| {
+            let csv = format!("{header}\n1\n");
+            suggested(&suggest(&csv), header).and_then(|column| column.unit)
+        };
+        assert_eq!(unit("Load (kW)"), Some(ImportUnit::Kilowatt));
+        assert_eq!(unit("loadKw"), Some(ImportUnit::Kilowatt));
+        assert_eq!(unit("load_w"), Some(ImportUnit::Watt));
+        assert_eq!(unit("load MW"), Some(ImportUnit::Megawatt));
+        assert_eq!(unit("load_kwh"), Some(ImportUnit::KilowattHourPerInterval));
+        assert_eq!(unit("load Wh"), Some(ImportUnit::WattHourPerInterval));
+        assert_eq!(unit("load kW kWh"), None, "two units state neither");
+        assert_eq!(unit("price $/kWh"), Some(ImportUnit::UsdPerKilowattHour));
+        assert_eq!(unit("price c/kWh"), Some(ImportUnit::CentsPerKilowattHour));
+        assert_eq!(unit("price ¢/kWh"), Some(ImportUnit::CentsPerKilowattHour));
+        assert_eq!(
+            unit("price usd_per_mwh"),
+            Some(ImportUnit::UsdPerMegawattHour)
+        );
+        assert_eq!(unit("temp_F"), Some(ImportUnit::Fahrenheit));
+        assert_eq!(unit("temperature"), None);
+    }
+
+    #[test]
+    fn a_price_with_no_currency_is_read_by_size_and_says_so() {
+        let found = suggest("rate_per_kwh\n9.8\n");
+        let column = suggested(&found, "rate_per_kwh").unwrap();
+        assert_eq!(column.unit, Some(ImportUnit::CentsPerKilowattHour));
+        assert!(column.check.as_deref().unwrap().contains("cents"));
+        // No direction either: the check says both things.
+        assert!(column
+            .check
+            .as_deref()
+            .unwrap()
+            .contains("import or export"));
+    }
+
+    #[test]
+    fn suggestions_stay_silent_rather_than_guess() {
+        // Grid import in kW is not the load, and a demand charge is not an energy price.
+        let found = suggest("grid_import_kw,demand_charge_usd,notes\n1,2,x\n");
+        assert!(found.columns.is_empty(), "{found:?}");
+        assert_eq!(found.notes.len(), 3);
+        // A date with no time is not a timestamp the importer accepts.
+        let found = suggest("date,load_kw\n2024-01-01,1\n");
+        assert!(suggested(&found, "date").is_none());
+    }
+
+    #[test]
+    fn net_load_is_suggested_with_a_warning_about_double_counting() {
+        let found = suggest("net_load_kw\n1\n");
+        let column = suggested(&found, "net_load_kw").unwrap();
+        assert_eq!(column.role, "load");
+        assert!(column.check.as_deref().unwrap().contains("twice"));
+    }
+
+    #[test]
+    fn the_interval_hint_comes_from_the_timestamps_and_refuses_an_illegal_spacing() {
+        let found = suggest("ts,load_kw\n2024-01-01T00:00:00Z,1\n2024-01-01T00:15:00Z,1\n");
+        assert_eq!(found.interval_minutes, Some(15));
+        let found = suggest("ts,load_kw\n2024-01-01T00:00:00Z,1\n2024-01-01T02:00:00Z,1\n");
+        assert_eq!(
+            found.interval_minutes, None,
+            "two hours is not a legal interval"
+        );
+        let found = suggest("ts,load_kw\n2024-01-01T01:00:00Z,1\n2024-01-01T00:00:00Z,1\n");
+        assert_eq!(found.interval_minutes, None, "backwards is not an interval");
     }
 
     #[test]

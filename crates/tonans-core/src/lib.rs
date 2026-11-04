@@ -84,6 +84,7 @@ pub mod error;
 pub mod export;
 pub mod limits;
 pub mod paths;
+pub mod profile;
 pub mod provenance;
 pub mod report;
 pub mod run;

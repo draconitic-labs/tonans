@@ -131,6 +131,11 @@ fn warning_ledger(html: &mut String, warnings: &[Warning]) {
         "<p class=\"muted\">{count} warning(s), most serious first. Nothing here is filtered out for being inconvenient.</p>\n<ul class=\"ledger\">\n",
         count = warnings.len()
     );
+    ledger_items(html, warnings);
+    html.push_str("</ul>\n</section>\n");
+}
+
+fn ledger_items(html: &mut String, warnings: &[Warning]) {
     for warning in warnings {
         // Status colour never carries meaning alone: the severity is spelled out.
         let _ = writeln!(
@@ -142,7 +147,6 @@ fn warning_ledger(html: &mut String, warnings: &[Warning]) {
             message = escape(&warning.message)
         );
     }
-    html.push_str("</ul>\n</section>\n");
 }
 
 fn severity_icon(severity: Severity) -> &'static str {
@@ -925,6 +929,14 @@ fn sensitivity_section(html: &mut String, study: &SensitivityResult, currency: &
         "<section class=\"scenario\">\n<h2>Sensitivity — {name}</h2>\n",
         name = escape(&study.scenario_name)
     );
+
+    // A study's own warnings, such as whether installed cost moved with battery size,
+    // change how its numbers read, so they sit above the matrices.
+    if !study.warnings.is_empty() {
+        html.push_str("<ul class=\"ledger\">\n");
+        ledger_items(html, &study.warnings);
+        html.push_str("</ul>\n");
+    }
 
     let rows: Vec<String> = study.axes[0]
         .values
