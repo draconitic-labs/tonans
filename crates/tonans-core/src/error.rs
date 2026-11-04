@@ -86,15 +86,6 @@ pub enum Error {
         message: String,
     },
 
-    /// The current entitlement does not permit the requested operation.
-    #[error("{message}")]
-    NotEntitled {
-        /// Stable machine code, e.g. `entitlement.scenario_limit`.
-        code: &'static str,
-        /// Human-readable explanation, including what the limit is.
-        message: String,
-    },
-
     /// Filesystem failure.
     #[error("{context}: {source}")]
     Io {
@@ -125,8 +116,7 @@ impl Error {
             | Error::LimitExceeded { code, .. }
             | Error::Validation { code, .. }
             | Error::UnsafePath { code, .. }
-            | Error::Schema { code, .. }
-            | Error::NotEntitled { code, .. } => code,
+            | Error::Schema { code, .. } => code,
             Error::NonFinite { .. } => "internal.non_finite",
             Error::Io { .. } => "io.failed",
             Error::Json { .. } => "json.failed",
@@ -144,7 +134,6 @@ impl Error {
             Error::Import { .. } | Error::Validation { .. } | Error::Schema { .. } => 422,
             Error::LimitExceeded { .. } => 413,
             Error::UnsafePath { .. } => 400,
-            Error::NotEntitled { .. } => 403,
             Error::NonFinite { .. } | Error::Io { .. } | Error::Json { .. } => 500,
         }
     }
@@ -374,10 +363,6 @@ mod tests {
                 message: "no".into(),
             },
             Error::non_finite("x", f64::NAN),
-            Error::NotEntitled {
-                code: "entitlement.scenario_limit",
-                message: "no".into(),
-            },
         ];
         for error in cases {
             assert!(!error.code().is_empty(), "{error:?}");
