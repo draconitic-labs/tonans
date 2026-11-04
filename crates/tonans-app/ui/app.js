@@ -2700,7 +2700,9 @@ function energyFlow(e) {
   const stored = e.final_stored_energy_kwh - e.initial_stored_energy_kwh;
 
   const inputs = [
-    ['generation', 'Generation', e.generation_used_kwh],
+    // Available, not used: what was curtailed is on the other bar, so counting only what
+    // was used would leave the bars apart by exactly that, and the balance would not close.
+    ['generation', 'Generation', e.generation_available_kwh],
     ['import', 'Grid import', e.grid_import_kwh],
     ['discharge', 'Battery out', e.battery_discharge_kwh],
   ];
@@ -2717,7 +2719,9 @@ function energyFlow(e) {
   for (const [title, segments, total] of [['Energy in', inputs, totalIn], ['Energy out', outputs, totalOut]]) {
     box.appendChild(el('div', { class: 'flow-label' }, [
       el('span', { text: title }),
-      el('span', { text: fmt.kwh(total) }),
+      // Equal totals can differ in the last bit and round apart at a .5, which would read
+      // as a kWh going missing. The demo does exactly that.
+      el('span', { text: fmt.kwh(Math.abs(totalIn - totalOut) < 1e-6 ? scale : total) }),
     ]));
     const present = segments.filter(([, , value]) => value > 0);
     const bar = el('div', { class: 'flow-bar', style: { width: `${(total / scale) * 100}%` } });
@@ -2738,9 +2742,12 @@ function energyFlow(e) {
     ]))));
   }
 
+  const battery = e.battery_charge_kwh > 0 || e.battery_discharge_kwh > 0
+    ? `Battery in and Battery out differ by the ${fmt.kwh(losses)} lost in conversion and standing loss, ` +
+      `and the ${fmt.kwh(stored)} change in stored energy. `
+    : '';
   box.appendChild(el('p', { class: 'chart-note', text:
-    `Both bars are drawn to the same scale. Stored energy changed by ${fmt.kwh(stored)} and ` +
-    `${fmt.kwh(losses)} was lost in conversion and standing loss, which is why they are not identical. ` +
+    `Both bars are drawn to the same scale, and they match because the model conserves energy at the bus. ${battery}` +
     'This is an energy balance, not an AC power-flow study.' }));
   return box;
 }
