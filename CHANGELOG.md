@@ -66,10 +66,13 @@ Other results that could have been wrong before this version, none of which chan
 - **A second window could delete imported data.** Saving from a window opened before another
   window imported a file put the empty project back. Now the save is refused, and nothing is
   overwritten.
-- **A suggested mapping could be 1000 times wrong.** `kWhLoad` and similar headers were read as
-  Wh, and `LoadkW` as W. `price_eur_per_kwh` was read as dollars, a backup generator as the
-  critical load, and a running meter total as energy per interval. If you accepted a suggestion
-  for a header like these, check the figures on the data screen against a bill.
+- **A suggested mapping could be 1000 times wrong, or plainly the wrong column.** `kWhLoad` and
+  similar headers were read as Wh, `price_eur_per_kwh` as dollars, a backup generator and
+  `Non_Critical_Load_kW` as the critical load, `Solar_Irradiance_W/m2` as generation, and a running
+  meter total as energy per interval. If you accepted a suggestion for a header like these, check
+  the figures on the data screen against a bill. A column now gets a role only when every word of
+  its header is recognized and states both the meaning and the unit. **A suggestion is still only a
+  suggestion:** it reads a header and not your data, and it always needs your review.
 
 Also changed in what the screen says:
 
