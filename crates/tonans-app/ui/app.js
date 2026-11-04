@@ -3771,8 +3771,9 @@ async function runExport() {
     })).finally(() => releaseBusy(mark));
   });
   if (late) {
-    toast(`The export of "${stamp.project}" finished after the project changed. It describes the earlier version and is in ` +
-      `${reply.body.directory}. Export again for the current one.`, 'ui.late_result');
+    toast(stamp.project === state.project?.name
+      ? `The export finished after the project changed. It describes the earlier version and is in ${reply.body.directory}. Export again for the current one.`
+      : `The export of "${stamp.project}" finished after you left it, and is in ${reply.body.directory}.`, 'ui.late_result');
   } else if (reply) {
     state.bundle = reply.body;
     toast(`Wrote ${reply.body.artifacts.length} files.`, null, true);
