@@ -32,12 +32,14 @@ use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
 use tonans_app::server::Server;
 use tonans_app::state::AppState;
 use tonans_app::{default_workspace, demo};
 use tonans_core::error::Error;
-use tonans_core::store::{write_atomically, Workspace};
+use tonans_core::store::{write_atomically, write_user_file, Workspace};
 use tonans_core::version::{APP_VERSION, MODEL_VERSION, PRODUCT_NAME, SOURCE_URL, SUPPORT_EMAIL};
 
 const HELP: &str = "\
@@ -55,6 +57,11 @@ Flintglade — support@flintglade.com
 
 /// The one window.
 const WINDOW: &str = "main";
+
+/// The quit dialog's safe answer.
+const KEEP_WORKING: &str = "Keep working";
+/// The quit dialog's answer that loses work.
+const QUIT_WITHOUT_SAVING: &str = "Quit without saving";
 
 /// What the commands need from the running server.
 struct Shell {
@@ -273,7 +280,7 @@ fn write_chosen(
     let path = chosen
         .into_path()
         .map_err(|e| CommandError::new("desktop.bad_path", e.to_string()))?;
-    write_atomically(&path, bytes)?;
+    write_user_file(&path, bytes)?;
     Ok(Some(path.display().to_string()))
 }
 
@@ -426,6 +433,8 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
     api.prevent_close();
 
     let closing = window.clone();
+    // Keep working comes first because the first button takes Enter, and closing the
+    // dialog any other way reports neither label, so only a deliberate click discards.
     window
         .dialog()
         .message("This project has changes you have not saved. They are lost if you quit now.")
@@ -433,17 +442,22 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
         .kind(MessageDialogKind::Warning)
         .parent(window)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Quit without saving".to_string(),
-            "Keep working".to_string(),
+            KEEP_WORKING.to_string(),
+            QUIT_WITHOUT_SAVING.to_string(),
         ))
-        .show(move |quit_anyway| {
-            if quit_anyway {
+        .show_with_result(move |answer| {
+            if discards_unsaved_work(&answer) {
                 if let Some(shell) = closing.try_state::<Shell>() {
                     shell.unsaved.store(false, Ordering::SeqCst);
                 }
                 let _ = closing.close();
             }
         });
+}
+
+/// Whether an answer to the quit dialog means the user chose to lose their work.
+fn discards_unsaved_work(answer: &MessageDialogResult) -> bool {
+    matches!(answer, MessageDialogResult::Custom(label) if label == QUIT_WITHOUT_SAVING)
 }
 
 /// Stop the server, and give a write in progress a moment to finish.
@@ -633,6 +647,23 @@ mod tests {
             config["app"]["security"]["capabilities"],
             serde_json::json!([])
         );
+    }
+
+    #[test]
+    fn only_clicking_the_discard_button_discards_work() {
+        assert!(discards_unsaved_work(&MessageDialogResult::Custom(
+            QUIT_WITHOUT_SAVING.to_string()
+        )));
+        // Enter, Escape, and closing the dialog report these.
+        for answer in [
+            MessageDialogResult::Custom(KEEP_WORKING.to_string()),
+            MessageDialogResult::Cancel,
+            MessageDialogResult::Ok,
+            MessageDialogResult::Yes,
+            MessageDialogResult::No,
+        ] {
+            assert!(!discards_unsaved_work(&answer), "{answer:?}");
+        }
     }
 
     #[test]
