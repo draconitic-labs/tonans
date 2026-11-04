@@ -51,7 +51,8 @@ const MAX_JSON_BYTES: usize = 96 * 1024 * 1024;
 /// otherwise. Everything the UI needs is compiled into the binary and served from
 /// this origin. There is no CDN, no font service, no analytics — and no way to add
 /// one without changing this line, which is the point of writing it this way round.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+pub const CSP: &str =
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
      font-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; \
      base-uri 'none'; object-src 'none'";
 
