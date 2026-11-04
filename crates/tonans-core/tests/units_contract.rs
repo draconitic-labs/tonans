@@ -55,6 +55,7 @@ const UNITLESS: &[&str] = &[
     "max_csv_columns",
     "max_intervals",
     "max_scenarios",
+    "max_run_rows",
     "max_sensitivity_cells",
     "max_outage_windows",
     // A dimensionless fraction of a file, 0.0..=1.0. A bound, not a measurement.
