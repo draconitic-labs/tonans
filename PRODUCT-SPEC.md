@@ -57,8 +57,9 @@ review, not stamped designs or guaranteed savings.
 
 ## Limits
 
-A project holds up to 32 scenarios, and a sensitivity study runs up to 256 cells. These
-limits are a safety envelope that keeps a run bounded. Exports have no usage restrictions
+A project holds up to 32 scenarios, one run holds up to 420,480 rows (scenarios multiplied
+by intervals), and a sensitivity study runs up to 256 cells. These limits are a safety
+envelope that keeps a run bounded. Exports have no usage restrictions
 beyond the Apache License 2.0.
 
 ## Observable release-ready finish line
