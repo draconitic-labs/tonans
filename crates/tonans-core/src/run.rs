@@ -22,7 +22,6 @@ use crate::engine::{
     self, CostSummary, EnergySummary, EngineOptions, IntervalRow, OutageResult, ResolvedInput,
 };
 use crate::error::{Error, Result, Warning, WarningLedger};
-use crate::licensing::Entitlements;
 use crate::limits::Limits;
 use crate::schema::{Dataset, DemandPeriods, Project, Scenario, SeriesKind};
 use crate::version::{
@@ -123,11 +122,6 @@ pub struct RunResult {
     pub warnings: Vec<Warning>,
     /// The envelope this run was produced inside.
     pub limits: Limits,
-    /// The entitlement tier in force, stamped so a report cannot be separated
-    /// from the terms it was produced under.
-    pub tier: crate::licensing::Tier,
-    /// Whether reports from this run may be given to a third party.
-    pub client_report_rights: bool,
 
     /// The planning-only disclaimer. Present in the data, not merely in the
     /// template, so that a machine-readable export carries it too.
@@ -151,7 +145,7 @@ impl RunResult {
 
     /// Hash of the numeric model outputs. Two runs with the same
     /// [`Self::model_input_hash`] must match, even when presentation metadata,
-    /// entitlement labels, warning prose, or the run time differ.
+    /// warning prose or the run time differ.
     pub fn results_hash(&self) -> Result<Hash> {
         let mut scenarios = Vec::with_capacity(self.scenarios.len());
         for scenario in &self.scenarios {
@@ -282,12 +276,7 @@ fn model_scenarios(scenarios: &[Scenario]) -> Result<Vec<serde_json::Value>> {
 /// Run every scenario in `project`.
 ///
 /// `now_utc` is injected; this crate has no clock.
-pub fn run_project(
-    project: &Project,
-    entitlements: Entitlements,
-    now_utc: DateTime<Utc>,
-) -> Result<RunResult> {
-    entitlements.check_scenario_count(project.scenarios.len())?;
+pub fn run_project(project: &Project, now_utc: DateTime<Utc>) -> Result<RunResult> {
     let grid = project.validate_runnable()?;
 
     let baseline_spec = project.baseline().ok_or_else(|| {
@@ -404,8 +393,6 @@ pub fn run_project(
         scenarios,
         warnings: project_ledger.into_sorted(),
         limits: Limits::current(),
-        tier: entitlements.tier,
-        client_report_rights: entitlements.client_report_rights,
         disclaimer: PLANNING_DISCLAIMER.to_string(),
         model_exclusions: MODEL_EXCLUSIONS.iter().map(|s| (*s).to_string()).collect(),
     })
