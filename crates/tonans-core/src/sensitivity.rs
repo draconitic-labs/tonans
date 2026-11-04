@@ -3,8 +3,7 @@
 //! One or two axes, a handful of values on each, and a full engine run per cell.
 //! There is no interpolation between cells and no surrogate model: every number in
 //! the matrix was simulated. That is why the grid is small, and why it is bounded
-//! hard — [`limits::MAX_SENSITIVITY_CELLS`] engine runs is the ceiling, and a
-//! tier's entitlement may lower it further.
+//! hard: [`limits::MAX_SENSITIVITY_CELLS`] engine runs is the ceiling.
 //!
 //! Every perturbed scenario is validated *before* a single cell is run. A sweep
 //! that would produce an invalid scenario at value 7 of 10 fails immediately and
@@ -19,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use crate::economics;
 use crate::engine::{self, EngineOptions, ResolvedInput};
 use crate::error::{Error, Result, Warning, WarningLedger};
-use crate::licensing::Entitlements;
 use crate::limits;
 use crate::schema::{Project, Scenario, TariffSpec};
 use crate::timegrid::IntervalGrid;
@@ -240,11 +238,7 @@ impl SensitivityResult {
 }
 
 /// Run a sensitivity study.
-pub fn run(
-    project: &Project,
-    request: &SensitivityRequest,
-    entitlements: Entitlements,
-) -> Result<SensitivityResult> {
+pub fn run(project: &Project, request: &SensitivityRequest) -> Result<SensitivityResult> {
     let grid = project.validate_runnable()?;
 
     let scenario = project.scenario(&request.scenario_id).ok_or_else(|| {
@@ -255,7 +249,7 @@ pub fn run(
         )
     })?;
 
-    validate_axes(&request.axes, scenario, entitlements)?;
+    validate_axes(&request.axes, scenario)?;
 
     // The baseline, unperturbed. Every cell's saving is measured against it, and
     // it does not move as the axes do.
@@ -377,11 +371,7 @@ fn evaluate_cell(
     })
 }
 
-fn validate_axes(
-    axes: &[SensitivityAxis],
-    scenario: &Scenario,
-    entitlements: Entitlements,
-) -> Result<()> {
+fn validate_axes(axes: &[SensitivityAxis], scenario: &Scenario) -> Result<()> {
     if axes.is_empty() {
         return Err(Error::validation(
             "validation.sensitivity_no_axes",
@@ -481,7 +471,6 @@ fn validate_axes(
             ),
         ));
     }
-    entitlements.check_sensitivity_cells(cells)?;
     Ok(())
 }
 
@@ -551,12 +540,7 @@ mod tests {
             values: vec![1.0],
         };
         let axes = vec![axis.clone(), axis.clone(), axis];
-        let error = validate_axes(
-            &axes,
-            &Scenario::no_storage_baseline(),
-            Entitlements::commercial(),
-        )
-        .unwrap_err();
+        let error = validate_axes(&axes, &Scenario::no_storage_baseline()).unwrap_err();
         assert_eq!(error.code(), "limit.sensitivity_axes");
     }
 
@@ -572,21 +556,8 @@ mod tests {
                 values: (0..16).map(f64::from).collect(),
             },
         ];
-        // 16 x 16 = 256, exactly the cap: allowed for a commercial tier.
-        assert!(validate_axes(
-            &axes,
-            &Scenario::no_storage_baseline(),
-            Entitlements::commercial()
-        )
-        .is_ok());
-        // ...and refused for evaluation, whose cap is 25.
-        let error = validate_axes(
-            &axes,
-            &Scenario::no_storage_baseline(),
-            Entitlements::evaluation(),
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), "entitlement.sensitivity_limit");
+        // 16 x 16 = 256, exactly the cap: allowed.
+        assert!(validate_axes(&axes, &Scenario::no_storage_baseline()).is_ok());
     }
 
     #[test]
@@ -595,12 +566,7 @@ mod tests {
             param: SensitivityParam::BatteryEnergyKwh,
             values: vec![100.0],
         }];
-        let error = validate_axes(
-            &axes,
-            &Scenario::no_storage_baseline(),
-            Entitlements::commercial(),
-        )
-        .unwrap_err();
+        let error = validate_axes(&axes, &Scenario::no_storage_baseline()).unwrap_err();
         assert_eq!(error.code(), "validation.sensitivity_needs_battery");
     }
 
@@ -617,13 +583,9 @@ mod tests {
             },
         ];
         assert_eq!(
-            validate_axes(
-                &axes,
-                &Scenario::no_storage_baseline(),
-                Entitlements::commercial()
-            )
-            .unwrap_err()
-            .code(),
+            validate_axes(&axes, &Scenario::no_storage_baseline())
+                .unwrap_err()
+                .code(),
             "validation.sensitivity_duplicate_axis"
         );
 
@@ -632,13 +594,9 @@ mod tests {
             values: vec![1.0, 1.0],
         }];
         assert_eq!(
-            validate_axes(
-                &axes,
-                &Scenario::no_storage_baseline(),
-                Entitlements::commercial()
-            )
-            .unwrap_err()
-            .code(),
+            validate_axes(&axes, &Scenario::no_storage_baseline())
+                .unwrap_err()
+                .code(),
             "validation.sensitivity_duplicate_value"
         );
     }
@@ -650,13 +608,9 @@ mod tests {
             values: vec![f64::NAN],
         }];
         assert_eq!(
-            validate_axes(
-                &axes,
-                &Scenario::no_storage_baseline(),
-                Entitlements::commercial()
-            )
-            .unwrap_err()
-            .code(),
+            validate_axes(&axes, &Scenario::no_storage_baseline())
+                .unwrap_err()
+                .code(),
             "validation.non_finite"
         );
     }
