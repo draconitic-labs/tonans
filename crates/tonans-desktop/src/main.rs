@@ -154,12 +154,8 @@ async fn save_bundle(
     key: String,
     artifacts: Vec<String>,
 ) -> Result<Option<String>, CommandError> {
-    let workspace = &shell.server.workspace;
     // Read everything first, so a bad name fails before anything is written.
-    let files = artifacts
-        .iter()
-        .map(|artifact| Ok((artifact, workspace.read_export(&project, &key, artifact)?)))
-        .collect::<Result<Vec<_>, Error>>()?;
+    let files = read_bundle(&shell.server.workspace, &project, &key, &artifacts)?;
 
     let chosen = app
         .dialog()
@@ -189,6 +185,29 @@ async fn save_bundle(
         write_atomically(&destination.join(artifact), bytes)?;
     }
     Ok(Some(destination.display().to_string()))
+}
+
+/// Read the named artifacts of a bundle.
+///
+/// The bundle's own manifest is always read first, so `project` and `key` are validated
+/// by the workspace even when `artifacts` is empty. The caller joins them onto a folder
+/// the user picked, and `Path::join` with an absolute path discards that folder.
+fn read_bundle(
+    workspace: &Workspace,
+    project: &str,
+    key: &str,
+    artifacts: &[String],
+) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    workspace.read_export(project, key, "provenance.json")?;
+    artifacts
+        .iter()
+        .map(|artifact| {
+            Ok((
+                artifact.clone(),
+                workspace.read_export(project, key, artifact)?,
+            ))
+        })
+        .collect()
 }
 
 /// Save the blank interval-data template wherever the user says.
@@ -601,6 +620,45 @@ mod tests {
             config["app"]["security"]["capabilities"],
             serde_json::json!([])
         );
+    }
+
+    #[test]
+    fn a_bundle_folder_name_cannot_carry_a_path_out_of_the_chosen_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-desktop-test-{}-{}",
+            std::process::id(),
+            tonans_app::token::opaque_id()
+        ));
+        let workspace = Workspace::open(&root).unwrap();
+        let directory = workspace.export_dir("Site", "abc123").unwrap();
+        std::fs::write(directory.join("provenance.json"), b"{}").unwrap();
+
+        // Even with no artifacts named, a hostile project or key is refused, before the
+        // name reaches `Path::join`.
+        for (project, key) in [
+            ("/tmp/tonans-escape", "abc123"),
+            ("../../tonans-escape", "abc123"),
+            ("Site", "/tmp/tonans-escape"),
+            ("Site", "../.."),
+            ("Site", "missing"),
+        ] {
+            assert!(
+                read_bundle(&workspace, project, key, &[]).is_err(),
+                "{project} {key}"
+            );
+        }
+        assert!(read_bundle(&workspace, "Site", "abc123", &["/etc/passwd".to_string()]).is_err());
+        assert!(read_bundle(&workspace, "Site", "abc123", &["../x".to_string()]).is_err());
+
+        let files = read_bundle(
+            &workspace,
+            "Site",
+            "abc123",
+            &["provenance.json".to_string()],
+        )
+        .unwrap();
+        assert_eq!(files[0].1, b"{}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

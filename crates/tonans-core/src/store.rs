@@ -272,21 +272,27 @@ impl Workspace {
         let key = safe_name("run key", run_key)?;
         let file = safe_name("artifact name", artifact)?;
 
-        let exports = verified_child_directory(&self.root, &self.exports, "exports")?;
-        let directory =
-            verified_child_directory(&exports, &exports.join(&project), "export project")?;
-        let bundle = verified_child_directory(&directory, &directory.join(&key), "export bundle")?;
-        let path = confine(&bundle, &file)?;
-        let path = match verified_existing_file(&bundle, &path, "export artifact") {
-            Ok(path) => path,
-            Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::Schema {
+        // Asking for a bundle that does not exist is the caller's mistake, not a failure
+        // of the machine, at whichever level of the path it turns out to be missing.
+        let missing = |error: Error| match error {
+            Error::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+                Error::Schema {
                     code: "schema.artifact_not_found",
                     message: format!("no artifact named '{artifact}' is in that export"),
-                });
+                }
             }
-            Err(error) => return Err(error),
+            other => other,
         };
+
+        let exports =
+            verified_child_directory(&self.root, &self.exports, "exports").map_err(missing)?;
+        let directory =
+            verified_child_directory(&exports, &exports.join(&project), "export project")
+                .map_err(missing)?;
+        let bundle = verified_child_directory(&directory, &directory.join(&key), "export bundle")
+            .map_err(missing)?;
+        let path = confine(&bundle, &file)?;
+        let path = verified_existing_file(&bundle, &path, "export artifact").map_err(missing)?;
 
         fs::read(&path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
