@@ -42,14 +42,6 @@ body {
 .brand-sub { font-size: 12px; color: var(--ink-muted); }
 .topbar-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; }
 
-.badge {
-  padding: 2px 9px; border-radius: 999px;
-  border: 1px solid var(--hairline);
-  font-size: 11px; font-weight: 650;
-  text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--c-import);
-}
-
 .disclaimer {
   padding: 9px 18px;
   background: var(--surface);
