@@ -32,6 +32,8 @@ notice. The Evaluation grant does not expire and does not require activation.
 - Keep and use any version you have lawfully obtained, indefinitely. There is no
   kill switch, no expiry, and no activation check. If Flintglade ceases to exist,
   your copy keeps working.
+- Read, audit, and build the published source code for your own evaluation. Publishing
+  the source does not make Tonans open-source software and grants no other right.
 - Inspect the binary, its bill of materials, and its behaviour. Run it in a sandbox.
   Watch its network activity (there is none). We would rather you checked.
 
