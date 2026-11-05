@@ -287,7 +287,21 @@ impl Workspace {
         expected_revision: &str,
     ) -> Result<String> {
         let _lock = self.lock_for_write()?;
-        let exists = self.project_path(&project.name)?.exists();
+        // Only "not found" is a file that has gone. A folder that cannot be read says nothing
+        // about the file inside it.
+        let exists = match fs::metadata(self.project_path(&project.name)?) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                return Err(Error::io(
+                    format!(
+                        "the projects folder cannot be read, so '{}' was not saved",
+                        project.name
+                    ),
+                    e,
+                ))
+            }
+        };
         let changed = || Error::Conflict {
             code: "conflict.project_changed",
             message: format!(
@@ -727,6 +741,33 @@ mod tests {
             .save_project_at_revision(&project, REVISION_FILE_GONE)
             .unwrap_err();
         assert_eq!(refused.code(), "conflict.project_changed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_projects_folder_is_reported_as_that_and_not_as_a_file_gone() {
+        use std::os::unix::fs::PermissionsExt;
+        let (workspace, root) = revision_workspace("unreadable");
+        let project = revision_project("Shut");
+        let revision = workspace.write_project(&project).unwrap();
+        let path = workspace.project_path("Shut").unwrap();
+        let folder = path.parent().unwrap();
+        let open = fs::metadata(folder).unwrap().permissions();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let refused = workspace.save_project_at_revision(&project, &revision);
+        let again = workspace.save_project_at_revision(&project, REVISION_FILE_GONE);
+        fs::set_permissions(folder, open).unwrap();
+
+        for result in [refused, again] {
+            let error = result.unwrap_err();
+            assert_eq!(error.code(), "io.failed", "{error}");
+            let message = error.to_string();
+            assert!(message.contains("cannot be read"), "{message}");
+            assert!(!message.contains("moved or deleted"), "{message}");
+        }
+        assert_eq!(workspace.project_revision("Shut").unwrap(), revision);
         fs::remove_dir_all(root).unwrap();
     }
 
