@@ -30,7 +30,7 @@ export function formatBytes(bytes) {
 /** Why a file cannot be taken, judged from its size alone, or null if it can. */
 export function fileTooLarge(name, size, limit) {
   if (size <= limit) return null;
-  return `"${name}" is ${formatBytes(size)}. Tonans reads CSV files up to ${formatBytes(limit)}, so none of it was read.`;
+  return `"${name}" is ${formatBytes(size)}. CSV files can be up to ${formatBytes(limit)}.`;
 }
 
 // ---------------------------------------------------------------------------

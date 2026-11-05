@@ -29,20 +29,8 @@
   </div>
 </header>
 
-<!--
-  The disclaimer lives in the markup, not in the script. If app.js fails to load,
-  the page must still say what this application is and is not.
--->
-<div class="disclaimer" role="note">
-  <strong>Planning estimate for human review.</strong>
-  Tonans performs deterministic single-bus energy accounting. It is not an AC power-flow study, a
-  protection or interconnection analysis, a safety certification, or a guarantee of savings.
-  It never controls equipment. Results must be reviewed by a qualified engineer.
-</div>
-
 <noscript>
-  <div class="banner critical">This interface needs JavaScript. Tonans runs entirely on your machine
-    and loads no scripts from the network — the only script is the one served from this binary.</div>
+  <div class="banner critical">This interface needs JavaScript.</div>
 </noscript>
 
 <main class="shell">
@@ -61,10 +49,6 @@
     <div id="views" class="views">
       <div id="empty-state" class="empty">
         <h2>Open a project, or create one.</h2>
-        <p class="muted">Tonans stores everything on this machine, in the workspace folder named at the
-          bottom of this window. Nothing is uploaded anywhere. There is no account and no telemetry.</p>
-        <p class="muted">A bundled demonstration project is installed on first launch. Its data is
-          <strong>synthetic</strong>. It is not a real site's meter export.</p>
       </div>
 
       <div id="view-data" class="view hidden"></div>
@@ -83,7 +67,6 @@
 <footer class="footer">
   <span id="workspace-path" class="footer-path"></span>
   <span id="version-badge"></span>
-  <span class="muted">Bound to loopback only. No telemetry, no remote assets, no device control.</span>
 </footer>
 
 <script src="/app.js" type="module"></script>

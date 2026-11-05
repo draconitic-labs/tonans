@@ -8,7 +8,7 @@ single-bus energy accounting. It does not calculate AC power flow, short-circuit
 duty, protection coordination, conductor sizing, interconnection compliance,
 real-time dispatch, or device commands.
 
-Every screen and report must identify results as planning estimates for human
+Help and every report must identify results as planning estimates for human
 review, not stamped designs or guaranteed savings.
 
 ## Required workflow

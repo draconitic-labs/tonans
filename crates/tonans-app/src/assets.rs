@@ -281,14 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn the_disclaimer_is_in_the_markup_not_only_in_the_script() {
-        // If the script fails to load, the page must still say what this is.
-        assert!(INDEX.contains("Planning estimate"));
-        assert!(INDEX.contains("not an AC power-flow study"));
-        assert!(
-            INDEX.contains("never controls equipment")
-                || INDEX.contains("It never controls equipment")
-        );
+    fn help_carries_the_planning_boundary() {
+        assert!(SCRIPT.contains("el('p', { text: state.session.disclaimer })"));
+        assert!(SCRIPT.contains("state.session.model_exclusions.map"));
     }
 
     #[test]

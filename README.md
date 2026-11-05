@@ -31,8 +31,8 @@ and what remains before a Windows binary is published.
 Tonans performs deterministic single-bus energy accounting and produces **planning
 estimates for human review**. It is not an AC power-flow study, a protection or
 interconnection analysis, a battery lifetime model, an optimiser, or a guarantee of
-savings. `docs/MODEL.md` states the boundary in full, and every screen and export
-repeats it.
+savings. `docs/MODEL.md` states the boundary in full, and Help and every export
+repeat it.
 
 It is local-first in the literal sense: it binds only to `127.0.0.1`, serves assets
 compiled into the executable, makes no outbound connection, and stores project data

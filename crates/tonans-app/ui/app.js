@@ -130,7 +130,7 @@ async function request(path, { method = 'GET', body, raw, filename, revision } =
     text = await response.text();
   } catch {
     // All a page gets from a dropped connection is a TypeError saying "Load failed".
-    const error = new Error('Tonans lost its answer from its own local server, so it cannot tell whether this finished. Check the result before trying again, or restart Tonans.');
+    const error = new Error('No reply from the local server. Check the result before trying again, or restart.');
     error.code = 'ui.no_answer';
     throw error;
   }
@@ -167,13 +167,13 @@ const BUSY_NAME = { run: 'a run', study: 'a study', export: 'an export', import:
 
 /** What is running, whichever project is on screen now. The server does one at a time. */
 function busyText() {
-  return `Tonans is still running ${BUSY_NAME[state.busy.what]} of "${state.busy.project}". It does one at a time.`;
+  return `Still running ${BUSY_NAME[state.busy.what]} of "${state.busy.project}".`;
 }
 
 /** The note beside a button that is waiting on a job for another project. */
 function busyNote() {
   if (!state.busy || state.busy.project === state.project?.name) return null;
-  return el('p', { class: 'tiny muted', text: `${busyText()} This button comes back when that finishes.` });
+  return el('p', { class: 'tiny muted', text: busyText() });
 }
 
 /** A job has finished: bring back every button that was waiting for it. */
@@ -425,7 +425,7 @@ async function offerReopen() {
   const choice = await openDialog((dialog, close) => {
     dialog.appendChild(el('h3', { text: 'This project was changed somewhere else' }));
     dialog.appendChild(el('p', { text:
-      'Probably in another Tonans window. Nothing was saved or run from here, and the other change is intact.' }));
+      'Probably in another Tonans window. Nothing was saved or run from here.' }));
     dialog.appendChild(el('p', { text: unsaved
       ? 'Reopening loads the latest version and drops the unsaved changes on this screen. Keep working if you want to copy them first.'
       : 'Reopening loads the latest version.' }));
@@ -493,7 +493,7 @@ function staleNotice(unsavedText) {
 async function boot() {
   claimToken();
   if (!state.token) {
-    toast('No launch token. Open the link Tonans printed when it started.', 'server.unauthorized');
+    toast('No launch token. Open the link printed at startup.', 'server.unauthorized');
     return;
   }
 
@@ -543,7 +543,7 @@ async function quitApp() {
   }
   if (!(await settleUnsaved('stop the server'))) return;
   await guard(() => api('/api/shutdown', { method: 'POST' }));
-  document.body.textContent = 'Tonans has stopped. You can close this tab.';
+  document.body.textContent = 'Server stopped.';
 }
 
 async function refreshProjects() {
@@ -591,8 +591,6 @@ async function newProject() {
       }
     };
     dialog.appendChild(el('h3', { text: 'New project' }));
-    dialog.appendChild(el('p', { class: 'lede', text:
-      'A project holds one site\'s interval data and the scenarios you compare on it.' }));
     dialog.appendChild(el('div', { class: 'stack' }, [
       field('Name', name),
       field('Site timezone (IANA name)', timezone),
@@ -759,7 +757,7 @@ function renderBus() {
   renderNext();
 }
 
-/** The next useful thing, in one line, with the button that does it. */
+/** The next useful thing, with the button that does it. Nothing, when there is nothing to do. */
 function nextStep() {
   const project = state.project;
   if (state.projectMissing) {
@@ -776,41 +774,35 @@ function nextStep() {
   }
   if (state.busy && !isUnsaved()) return { text: busyText() };
   if (!project.dataset) {
-    return state.upload
-      ? { text: 'Map every column below, then import.' }
-      : { text: 'Import a year of interval data to begin. Or try the sample data.',
-          label: state.view === 'data' ? null : 'Go to data', run: () => show('data') };
+    return state.upload || state.view === 'data' ? {} : { label: 'Go to data', run: () => show('data') };
   }
   if (isUnsaved()) return { text: 'You have unsaved changes.', label: 'Save', run: () => guard(saveProject) };
-  if (project.scenarios.length < 2) {
-    return { text: 'Add a candidate to compare with the baseline.', label: 'Add a scenario', run: addScenario };
-  }
-  if (!state.run) return { text: 'Run every scenario over every interval.', label: 'Run all scenarios', run: runAll };
+  if (project.scenarios.length < 2) return { label: 'Add a scenario', run: addScenario };
+  if (!state.run) return { label: 'Run all scenarios', run: runAll };
   if (state.view === 'sensitivity' && !state.study && !state.bundle) {
-    return { text: 'Choose what to vary and run the study, or go straight to export.',
-             label: 'Go to export', run: () => show('export') };
+    return { label: 'Go to export', run: () => show('export') };
   }
   if (!state.study && !state.bundle && state.view === 'results') {
-    return { text: 'Test how the results move with size, price, or reserve, or go straight to export.',
-             label: 'Open sensitivity', run: () => show('sensitivity') };
+    return { label: 'Open sensitivity', run: () => show('sensitivity') };
   }
   if (!state.study && !state.bundle && state.view !== 'export') {
     return { text: 'Results are current.', label: 'Compare results', run: () => show('results') };
   }
   if (!state.bundle) {
     return state.view === 'export'
-      ? { text: 'Write the report, the data, and the provenance manifest.', label: 'Export bundle', run: runExport }
-      : { text: 'Write the report, the data, and the provenance manifest.', label: 'Go to export', run: () => show('export') };
+      ? { label: 'Export bundle', run: runExport }
+      : { label: 'Go to export', run: () => show('export') };
   }
-  return { text: 'Everything is current. The bundle matches these results.' };
+  return { text: 'Everything is current.' };
 }
 
 function renderNext() {
   const node = document.getElementById('next');
   clear(node);
   const next = nextStep();
-  node.appendChild(el('span', { class: 'next-label', text: 'Next' }));
-  node.appendChild(el('span', { class: 'muted', text: next.text }));
+  node.classList.toggle('hidden', !next.text && !next.label);
+  if (next.label) node.appendChild(el('span', { class: 'next-label', text: 'Next' }));
+  if (next.text) node.appendChild(el('span', { class: 'muted', text: next.text }));
   if (next.label) node.appendChild(el('button', { type: 'button', text: next.label, onclick: next.run }));
 }
 
@@ -1054,6 +1046,7 @@ function showHelp() {
     ])));
 
     dialog.appendChild(el('h4', { text: 'What the model does not do' }));
+    dialog.appendChild(el('p', { text: state.session.disclaimer }));
     dialog.appendChild(el('ul', {}, state.session.model_exclusions.map((line) => el('li', { text: line }))));
 
     dialog.appendChild(el('h4', { text: 'Where things are' }));
@@ -1133,12 +1126,11 @@ function importedBanner(imported) {
     } })
     : null;
   return el('div', { class: 'banner ok' }, [
-    el('p', { text: `Imported ${imported.interval_count.toLocaleString()} intervals. ` +
-      'Check the figures below against what you know about this site, then set up the scenarios to compare.' }),
+    el('p', { text: `Imported ${imported.interval_count.toLocaleString()} intervals.` }),
     flat.length
       ? el('p', { text: hasPrices
-        ? 'Your file has price columns, but the tariff here is still Tonans\'s round example flat rate.'
-        : 'The tariff here is still Tonans\'s round example flat rate. Set your own on each scenario.' })
+        ? 'Your file has price columns. The tariff is still the example flat rate.'
+        : 'The tariff is still the example flat rate.' })
       : null,
     imported.warnings?.length ? ledger(imported.warnings) : null,
     el('div', { class: 'row' }, [next, usePrices]),
@@ -1147,13 +1139,7 @@ function importedBanner(imported) {
 
 function sourceChooser(project) {
   const box = el('section', { class: 'stack' });
-  box.appendChild(el('div', {}, [
-    el('h3', { text: project.dataset ? 'Replace the interval data' : 'Import interval data' }),
-    el('p', { class: 'lede', text:
-      'Tonans reads the file you choose and nothing else. You state the timezone, the interval, and the ' +
-      'unit of every column, and every column must be mapped or explicitly ignored. Tonans never guesses ' +
-      'silently: it can suggest a mapping from your headers, and you review it before anything is read.' }),
-  ]));
+  box.appendChild(el('h3', { text: project.dataset ? 'Replace the interval data' : 'Import interval data' }));
 
   const picker = el('input', { type: 'file', accept: '.csv,text/csv', id: 'csv-file', class: 'hidden' });
   picker.addEventListener('change', async () => {
@@ -1188,9 +1174,8 @@ function sourceChooser(project) {
     template,
   ]));
   box.appendChild(el('p', { class: 'tiny muted', text:
-    'The sample is one synthetic year of hourly data for an invented light-industrial site. It goes through ' +
-    'the same mapping and import as your own file, and the project records that it is synthetic. The template ' +
-    'has every column Tonans can read and three rows showing the format of each.' }));
+    'Sample: one synthetic year of hourly data for an invented light-industrial site. ' +
+    'Template: every column that can be read, with three example rows.' }));
   return box;
 }
 
@@ -1199,7 +1184,7 @@ async function readFile(file) {
   try {
     return new Uint8Array(await file.arrayBuffer());
   } catch {
-    const error = new Error(`Tonans could not read "${file.name}". It may have been moved or deleted, or you may not have permission to read it.`);
+    const error = new Error(`Could not read "${file.name}". It may have been moved or deleted, or you may not have permission to read it.`);
     error.code = 'ui.file_unreadable';
     throw error;
   }
@@ -1364,10 +1349,7 @@ function notesCard(project) {
     recordEdit('project-notes', 'edit notes', () => { project.notes = notes.value; });
   });
   return el('section', { class: 'stack' }, [
-    el('div', {}, [
-      el('h3', { text: 'Notes' }),
-      el('p', { class: 'lede', text: 'Reproduced in the exported report.' }),
-    ]),
+    el('h3', { text: 'Notes' }),
     notes,
   ]);
 }
@@ -1378,7 +1360,7 @@ function mappingCard(receipt) {
   card.appendChild(el('div', {}, [
     el('h3', { text: `Map the columns of ${receipt.filename}` }),
     el('p', { class: 'lede', text:
-      `${receipt.row_count.toLocaleString()} data rows, ${receipt.headers.length} columns. Nothing has been interpreted yet.` }),
+      `${receipt.row_count.toLocaleString()} data rows, ${receipt.headers.length} columns.` }),
     el('p', { class: 'mono tiny muted', text: receipt.sha256 }),
   ]));
 
@@ -1388,9 +1370,9 @@ function mappingCard(receipt) {
   const interval = el('input', { type: 'number', id: 'imp-interval', value: settings.interval, min: '1', max: '60' });
   interval.addEventListener('input', () => { settings.interval = interval.value; settings.intervalNote = null; });
   const gap = select('imp-gap', [
-    ['reject', 'Reject the file (the safe default)'],
-    ['fill_zero', 'Fill with zero: the filled intervals are NOT measurements'],
-    ['hold_last_value', 'Hold the previous value: the filled intervals are NOT measurements'],
+    ['reject', 'Reject the file'],
+    ['fill_zero', 'Fill with zero'],
+    ['hold_last_value', 'Hold the previous value'],
   ], settings.gap);
   gap.addEventListener('change', () => { settings.gap = gap.value; });
   const gapMax = el('input', { type: 'number', id: 'imp-gap-max', value: settings.gapMax, min: '1', max: '24' });
@@ -1410,8 +1392,7 @@ function mappingCard(receipt) {
   const suggest = el('button', { type: 'button', text: 'Suggest mapping from headers', onclick: () => suggestFromHeaders(receipt) });
   card.appendChild(el('div', { class: 'row' }, [
     suggest,
-    el('span', { class: 'tiny muted', text:
-      'Fills the choices below from your column names, with the reason for each. Nothing is read until you confirm.' }),
+    el('span', { class: 'tiny muted', text: 'Fills the choices below from your column names.' }),
   ]));
   // A column left unsuggested is a question for the user, so it is not set in small print.
   if (state.mappingNotes.length) {
@@ -1555,7 +1536,7 @@ async function suggestFromHeaders(receipt) {
   }
   renderData();
   const applied = found.columns.length;
-  toast(`Suggested ${applied} of ${receipt.headers.length} columns. Review each one, then confirm.`, null, true);
+  toast(`Suggested ${applied} of ${receipt.headers.length} columns.`, null, true);
 }
 
 async function runImport(receipt) {
@@ -1598,7 +1579,7 @@ async function runImport(receipt) {
     return;
   }
   if (!timestamp) { toast('One column must be the timestamp.', 'ui.no_timestamp'); return; }
-  if (!series.load) { toast('One column must be the load. Tonans cannot run without it.', 'ui.no_load'); return; }
+  if (!series.load) { toast('One column must be the load.', 'ui.no_load'); return; }
 
   const mode = document.getElementById('imp-gap').value;
   const max = Number(document.getElementById('imp-gap-max').value);
@@ -1701,13 +1682,7 @@ function renderScenarios() {
   const scenario = selectedScenario();
   state.selected = scenario.id;
 
-  root.appendChild(el('div', {}, [
-    el('h3', { text: 'Scenarios' }),
-    el('p', { class: 'lede', text:
-      'Each scenario is complete in itself: what you read here is exactly what the engine uses. Dispatch ' +
-      'policies are named rules evaluated interval by interval with no view of the future. Tonans does not ' +
-      'optimise and never claims an optimal result.' }),
-  ]));
+  root.appendChild(el('h3', { text: 'Scenarios' }));
 
   if (project.scenarios.length > 1) root.appendChild(assumptionDiff(project));
 
@@ -1937,9 +1912,8 @@ function batterySection(scenario, prefix) {
       field('Initial capacity (% of nameplate)', num(scenario, 'initial_capacity_pct')),
     ]));
     body.push(el('p', { class: 'tiny muted', text:
-      `Round trip: ${(b.charge_efficiency_pct * b.discharge_efficiency_pct / 100).toFixed(1)} %. All conversion ` +
-      'loss lives in these two efficiencies. The inverter contributes a power ceiling and no loss of its own, ' +
-      'so the two are never double-counted.' }));
+      `Round trip: ${(b.charge_efficiency_pct * b.discharge_efficiency_pct / 100).toFixed(1)} %. ` +
+      'The inverter adds a power ceiling and no further loss.' }));
     body.push(deratingEditor(scenario, b, prefix));
   }
   const summary = b
@@ -1999,7 +1973,7 @@ function deratingEditor(scenario, battery, prefix) {
       change('remove derating', () => { delete battery.temperature_derate; });
     } }),
   ]));
-  box.appendChild(el('p', { class: 'tiny muted', text: 'Points must rise in temperature. Between points Tonans interpolates linearly.' }));
+  box.appendChild(el('p', { class: 'tiny muted', text: 'Points must rise in temperature. Values between points are interpolated linearly.' }));
   return box;
 }
 
@@ -2038,14 +2012,11 @@ function dispatchSection(scenario, prefix) {
     self_consumption: 'Stores surplus generation and discharges to cover net load. Never charges from ' +
       'the grid; never exports from the battery.',
     peak_limit: 'Discharges only as much as it takes to hold grid import at or below the ceiling, and ' +
-      'charges from surplus generation. It does not otherwise self-consume: holding the peak down is ' +
-      'the whole job.',
-    reserve_first: 'Below the target the battery only ever charges: refilling the outage reserve outranks ' +
-      'every saving. At or above it, it behaves as self-consumption and will not fall back below the target ' +
-      'while the grid is up.',
-    manual_schedule: 'Follows your setpoints exactly, and is idle outside them. Setpoints are clipped to ' +
-      'what the hardware can do, and any clipping is reported as a warning: the schedule you wrote is not ' +
-      'necessarily the schedule that ran.',
+      'charges from surplus generation.',
+    reserve_first: 'Below the target the battery only charges. At or above it, it behaves as self-consumption ' +
+      'and stays above the target while the grid is up.',
+    manual_schedule: 'Follows your setpoints, and is idle outside them. Setpoints are clipped to ' +
+      'what the hardware can do, and clipping is reported as a warning.',
   }[d.policy];
   body.push(el('p', { class: 'tiny muted', text: explain }));
 
@@ -2111,8 +2082,7 @@ function tariffSection(scenario, prefix) {
       return button;
     }),
   ]));
-  body.push(el('p', { class: 'tiny muted', text:
-    'Presets fill in a tariff\'s shape with round example rates. They are not any utility\'s tariff: replace the rates with yours.' }));
+  body.push(el('p', { class: 'tiny muted', text: 'Presets use round example rates.' }));
 
   const importSource = select(`imp-src-${scenario.id}`, [
     ['series', 'Per-interval price from the imported data'],
@@ -2246,8 +2216,8 @@ function degradationSection(scenario, prefix) {
   return section('degradation', 'Degradation',
     `${g.calendar_fade_pct_per_year} %/year calendar, ${g.cycle_fade_pct_per_cycle} %/cycle`, [
       el('p', { class: 'tiny muted', text:
-        'A transparent approximation, not a lifetime model: a yearly fade in two terms, each year taken from what is left, that knows nothing about ' +
-        'depth of discharge, C-rate, or thermal history. Where a vendor gives a warranted capacity curve, use that instead.' }),
+        'A yearly fade in two terms, each year taken from what is left. Depth of discharge, C-rate and ' +
+        'temperature history aren\'t modelled.' }),
       el('div', { class: 'grid' }, [
         field('Calendar fade (% per year)', num('calendar_fade_pct_per_year')),
         field('Cycle fade (% per equivalent full cycle)', num('cycle_fade_pct_per_cycle')),
@@ -2298,8 +2268,7 @@ function scheduleEditor(dispatch, prefix) {
     });
   } })));
   box.appendChild(el('p', { class: 'tiny muted', text:
-    'Windows must start and end exactly on an interval boundary inside the imported data. Tonans will ' +
-    'not round a window to fit: that would be a silent repair.' }));
+    'Windows must start and end exactly on an interval boundary inside the imported data.' }));
   return box;
 }
 
@@ -2337,8 +2306,8 @@ function outageSection(scenario, prefix) {
         applyToAll('outage list', (from, to) => { to.outage = structuredClone(from.outage); }),
       ]),
       el('p', { class: 'tiny muted', text:
-        'During an outage Tonans assumes non-critical load is shed by a transfer switch, and lets the battery ' +
-        'discharge below its reserve floor down to its hard minimum: the reserve exists for exactly this moment.' }),
+        'During an outage, non-critical load is shed and the battery can discharge below its reserve floor ' +
+        'down to its minimum.' }),
     ]);
 }
 
@@ -2550,17 +2519,16 @@ function addScenario() {
           el('label', { text: 'Installed cost (USD per kWh of nameplate)' }),
           cost,
           el('span', { class: 'field-note', text: known
-            ? `From ${known.from} in this project. Replace it with your quote.`
-            : 'Tonans has no price data. Enter your own quote; 0 is allowed and will make NPV look better than it is.' }),
+            ? `From ${known.from} in this project.`
+            : 'Enter your quote.' }),
         ]));
       }
       if (fields.length) pane.appendChild(el('div', { class: 'grid' }, fields));
       pane.appendChild(el('p', { class: 'tiny muted', text: current.noCost
-        ? 'Every assumption is copied from the baseline. It is a starting point, not a recommendation.'
-        : 'Tariff, economics, degradation, and outages are copied from the baseline, so the comparison stays like ' +
-          'for like. That includes any replacement cost, which does not move with the size here. Battery defaults ' +
-          'are 95 % efficiency each way, a 10 to 100 % window, 1.5 % self-discharge a month, and a 50 % starting ' +
-          'charge. All of it is a starting point, not a recommendation: review it on the scenario.' }));
+        ? 'Every assumption is copied from the baseline.'
+        : 'Tariff, economics, degradation and outages are copied from the baseline, including any replacement ' +
+          'cost, which doesn\'t move with size. Battery defaults: 95 % efficiency each way, a 10 to 100 % window, ' +
+          '1.5 % self-discharge a month, a 50 % starting charge.' }));
       pane.appendChild(failure);
     };
 
@@ -2591,7 +2559,7 @@ function addScenario() {
         if (!current.noCost) {
           const raw = cost.value.trim();
           if (raw === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0) {
-            throw new Error('Enter an installed cost per kWh. Tonans has no price data to fill this in.');
+            throw new Error('Enter an installed cost per kWh.');
           }
           costPerKwh = Number(raw);
         }
@@ -2635,7 +2603,7 @@ function addScenario() {
   }).then((added) => {
     if (!added) return;
     show('scenarios');
-    toast(`Added ${added} scenario${added === 1 ? '' : 's'}. Review the assumptions, then save.`, null, true,
+    toast(`Added ${added} scenario${added === 1 ? '' : 's'}.`, null, true,
       { label: 'Undo', run: undo });
   });
 }
@@ -2686,12 +2654,7 @@ function renderResults() {
   go.disabled = Boolean(state.busy);
   root.appendChild(el('div', {}, [
     el('h3', { text: 'Results' }),
-    el('div', { class: 'row' }, [
-      go,
-      el('span', { class: 'tiny muted', text:
-        'Every scenario is simulated over every interval. Identical inputs always produce identical results, ' +
-        'and the hashes below are how you can check that.' }),
-    ]),
+    el('div', { class: 'row' }, go),
     busyNote(),
   ]));
 
@@ -2711,8 +2674,6 @@ function renderResults() {
 function provenanceSection(run) {
   return el('section', { class: 'stack' }, [
     el('h3', { text: 'Provenance' }),
-    el('p', { class: 'lede', text:
-      'The same model input hash on the same build gives the same results hash. Compare these against a report or a later run.' }),
     kv([
       ['Results hash', state.resultsHash],
       ['Model input hash', run.model_input_hash],
@@ -2745,14 +2706,14 @@ function warningSection(run) {
   const box = el('section', { class: 'stack' });
   if (!warnings.length) {
     box.appendChild(el('h3', { text: 'Warning ledger' }));
-    box.appendChild(el('p', { class: 'lede', text: 'No warnings were raised. Every assumption is still an assumption.' }));
+    box.appendChild(el('p', { class: 'lede', text: 'No warnings.' }));
     return box;
   }
   const serious = warnings.filter((w) => w.severity !== 'info');
   const notes = warnings.filter((w) => w.severity === 'info');
   box.appendChild(el('div', {}, [
     el('h3', { text: `Warning ledger (${warnings.length})` }),
-    el('p', { class: 'lede', text: 'Most serious first. Nothing is filtered out for being inconvenient.' }),
+    el('p', { class: 'lede', text: 'Most serious first.' }),
   ]));
   if (serious.length) box.appendChild(ledger(serious));
   if (notes.length) {
@@ -2870,8 +2831,7 @@ function comparisonSection(run) {
     el('div', {}, [
       el('h3', { text: 'Compare scenarios' }),
       el('p', { class: 'lede', text:
-        'Bars compare within a column. The tick marks the baseline\'s value. A negative change in cost is a saving. ' +
-        'These are the rules you set up, compared; Tonans does not search for an optimum.' }),
+        'Bars compare within a column. The tick marks the baseline\'s value. A negative change in cost is a saving.' }),
     ]),
     el('div', { class: 'scroll' }, el('table', { class: 'lens' }, [el('thead', {}, head), body])),
   ]);
@@ -2987,9 +2947,7 @@ function scenarioResult(run, s) {
       ['Energy balance residual', `${e.energy_balance_residual_kwh.toExponential(2)} kWh`],
     ]),
     el('p', { class: 'tiny muted', text:
-      'The residual is the model checking itself: generation used, plus import, plus discharge, minus load ' +
-      'served, export, and charge, summed over every interval. It should be zero to within floating-point ' +
-      'rounding. If it is not, nothing above is trustworthy.' }),
+      'Residual: generation used + import + discharge − load served − export − charge, over every interval.' }),
   ]));
 
   if (s.scenario.battery || k.capex_usd > 0) {
@@ -3080,12 +3038,10 @@ function energyFlow(e) {
   }
 
   const battery = e.battery_charge_kwh > 0 || e.battery_discharge_kwh > 0
-    ? `Battery in and Battery out differ by the ${fmt.kwh(losses)} lost in conversion and standing loss, ` +
-      `and the ${fmt.kwh(stored)} change in stored energy. `
+    ? ` Battery in and Battery out differ by the ${fmt.kwh(losses)} lost in conversion and standing loss, ` +
+      `and the ${fmt.kwh(stored)} change in stored energy.`
     : '';
-  box.appendChild(el('p', { class: 'chart-note', text:
-    `Both bars are drawn to the same scale, and they match because the model conserves energy at the bus. ${battery}` +
-    'This is an energy balance, not an AC power-flow study.' }));
+  box.appendChild(el('p', { class: 'chart-note', text: `Both bars are drawn to the same scale.${battery}` }));
   return box;
 }
 
@@ -3238,8 +3194,7 @@ function timelineCharts(timeline, hasBattery) {
   }
   const note = timeline.decimated
     ? `${timeline.source_interval_count.toLocaleString()} intervals shown as ` +
-      `${timeline.bucket_start_utc.length.toLocaleString()} buckets. The shaded band is each bucket's ` +
-      'full range, so no peak is hidden. The exported timeseries CSV holds every interval.'
+      `${timeline.bucket_start_utc.length.toLocaleString()} buckets. The shaded band is each bucket's full range.`
     : `${timeline.source_interval_count.toLocaleString()} intervals, at full resolution.`;
   return chartBlock(timeline, panels, `${note} Times are at the site.`, fmt.day);
 }
@@ -3523,9 +3478,7 @@ function renderSensitivity() {
   const box = el('section', { class: 'stack' });
   box.appendChild(el('div', {}, [
     el('h3', { text: 'Sensitivity' }),
-    el('p', { class: 'lede', text:
-      `Every cell is a full simulation of the whole data set, not an interpolation, which is why the grid ` +
-      `is bounded at ${state.session.limits.max_sensitivity_cells} cells.` }),
+    el('p', { class: 'lede', text: `Up to ${state.session.limits.max_sensitivity_cells} cells.` }),
   ]));
 
   const scenarioPick = select('sens-scenario', state.project.scenarios.map((s) => [s.id, s.name]), settings.scenario);
@@ -3592,16 +3545,15 @@ function renderSensitivity() {
         ? el('div', {}, [el('div', { class: 'grid' }, field('Installed cost (USD per kWh of nameplate)', rate)), differs])
         : el('p', { class: 'tiny muted', text:
           `Every cell keeps this scenario's installed cost of ${fmt.usd(scenarioOf().economics.capex_usd)}, ` +
-          'so a larger battery looks better than it is.' }),
+          'whatever the battery size.' }),
     ]));
   } else if (settings.p1 === 'battery_power_kw' || settings.p2 === 'battery_power_kw') {
     box.appendChild(el('p', { class: 'tiny muted', text:
-      'Battery power does not change installed cost in this study. Add installed cost as the other axis to see both move.' }));
+      'Battery power does not change installed cost in this study.' }));
   }
   if (hasPriceAxis([{ param: settings.p1 }, { param: settings.p2 }])) {
     box.appendChild(el('p', { class: 'tiny muted', text:
-      'A price axis changes the price for the baseline as well, because a price is not something the candidate ' +
-      'chooses. Each cell is what you would get by setting both scenarios to that price and comparing them.' }));
+      'A price axis sets the same price on the baseline and the candidate.' }));
   }
 
   const go = el('button', { class: 'primary', type: 'button', text: state.busy ? BUSY_LABEL[state.busy.what] : 'Run sensitivity', onclick: () => runStudy() });
@@ -3717,11 +3669,9 @@ function bestCells(study) {
   return el('section', { class: 'stack' }, [
     el('div', {}, [
       el('h3', { text: `Best of the ${count} cell${count === 1 ? '' : 's'} you tested` }),
-      el('p', { class: 'lede', text:
-        'These are the best values among the cells you chose. They are not an optimum: Tonans tests only what ' +
-        'you list, and a better answer can sit between or beyond these values.' +
-        (npv.value !== null && npv.value < 0 ? ' No tested cell has a positive net present value.' : '') +
-        (priced ? ' A price is not a choice: read this as how the result moves with the price, not as a cell to pick.' : '') }),
+      npv.value !== null && npv.value < 0
+        ? el('p', { class: 'lede', text: 'No tested cell has a positive net present value.' })
+        : null,
     ]),
     el('div', { class: 'best' }, items),
   ]);
@@ -3771,7 +3721,7 @@ function addCellAsScenario(study, cell) {
   syncUnsaved();
   // This screen now has unsaved changes to say so about.
   if (state.view === 'sensitivity') renderSensitivity();
-  toast(`Added "${scenario.name}" to the scenarios. Save and run to compare it.`, null, true, {
+  toast(`Added "${scenario.name}" to the scenarios.`, null, true, {
     label: 'Open it', run: () => show('scenarios'),
   });
 }
@@ -3860,7 +3810,7 @@ function heatTable(study, metric) {
   return el('div', {}, [
     el('div', { class: 'scroll' }, table),
     el('p', { class: 'chart-note', text:
-      `${metric.title} in ${metric.unit}. Every cell was simulated in full. ` +
+      `${metric.title} in ${metric.unit}. ` +
       (best.varies
         ? `The outlined cell${best.cells.length === 1 ? ' is' : 's are'} the ${metric.better === 'high' ? 'highest' : 'lowest'} of those tested.`
         : 'No cell stands out on this measure.') +
@@ -3929,18 +3879,17 @@ function renderExport() {
     el('div', {}, [
       el('h3', { text: 'Export' }),
       el('p', { class: 'lede', text:
-        'A self-contained HTML report with no script and no network access, the full results as JSON, every ' +
-        'interval as CSV, a provenance manifest with the input hashes, and a SHA-256 checksum of every file. ' +
-        'Written into your workspace folder.' }),
+        'An HTML report, results as JSON, every interval as CSV, a provenance manifest with input hashes, and ' +
+        'SHA-256 checksums. Written into your workspace folder.' }),
     ]),
     el('div', { class: 'row' }, [
       go,
       busyNote(),
-      el('span', { class: 'tiny muted', text: state.study
-        ? (isUnsaved()
-          ? 'Saving discards the sensitivity study on screen, so this export would leave it out. You will be asked first.'
-          : 'The current sensitivity study will be included.')
-        : 'Run a sensitivity study first to include one.' }),
+      state.study
+        ? el('span', { class: 'tiny muted', text: isUnsaved()
+          ? 'Saving discards the sensitivity study on screen, so this export would leave it out.'
+          : 'The current sensitivity study will be included.' })
+        : null,
     ]),
   ]));
 

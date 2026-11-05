@@ -180,9 +180,6 @@ try {
         $status = Get-Status $response
         if ($status -ne 200) { return "GET / returned $status" }
         $problems = @()
-        # In the markup, not merely from script: a page whose script failed to load
-        # must still say what it is.
-        if ($response -notmatch 'Planning estimate') { $problems += 'the page does not carry the planning-estimate boundary' }
         if ($response -notmatch "default-src 'none'") { $problems += 'no restrictive Content-Security-Policy header' }
         if ($response -notmatch '(?i)x-frame-options: DENY') { $problems += 'the page is framable' }
         if ($problems) { $problems -join '; ' }

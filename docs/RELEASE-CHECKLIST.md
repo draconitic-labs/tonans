@@ -288,7 +288,7 @@ integrity evidence, not publisher authentication.
 
 1. Verify the archive digest and extract it.
 2. Complete the walkthrough above using the exact staged package.
-3. Confirm the boundary text, assumptions, units, warnings, and exports are readable.
+3. Confirm the boundary text under Help, assumptions, units, warnings, and exports are readable.
 4. Record the package digest and outcome.
 5. Keep the binary unpublished until every final integrated gate and the walkthrough
    are closed.
