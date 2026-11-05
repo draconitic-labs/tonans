@@ -1915,31 +1915,15 @@ fn classify_price(
                  and unit yourself, or convert it first."
             ));
         }
-        (ImportUnit::UsdPerMegawattHour, None)
+        (Some(ImportUnit::UsdPerMegawattHour), None)
     } else if cents {
-        (ImportUnit::CentsPerKilowattHour, None)
+        (Some(ImportUnit::CentsPerKilowattHour), None)
     } else if dollars {
-        (ImportUnit::UsdPerKilowattHour, None)
+        (Some(ImportUnit::UsdPerKilowattHour), None)
     } else {
-        // The header says per kWh and truly no more. Say so, and read the size of the number.
-        let Some(first) = samples.iter().find_map(|cell| cell.parse::<f64>().ok()) else {
-            return Err(format!(
-                "'{shown}' gives no currency and no value to read. Choose its meaning and unit \
-                 yourself."
-            ));
-        };
-        let (unit, reading) = if first.abs() < 2.0 {
-            (ImportUnit::UsdPerKilowattHour, "dollars")
-        } else {
-            (ImportUnit::CentsPerKilowattHour, "cents")
-        };
-        (
-            unit,
-            Some(format!(
-                "The header gives no currency. The first value, {first}, reads as {reading} per kWh \
-                 by its size alone; check that against a bill."
-            )),
-        )
+        // The header says per kWh and truly no more.
+        let (unit, check) = unit_by_size(samples);
+        (unit, Some(check))
     };
     // A bare `$` is most often the US dollar, and it does not say so.
     let bare_dollar =
@@ -1962,10 +1946,59 @@ fn classify_price(
     };
     Ok((
         role,
-        Some(unit),
+        unit,
         format!("The header '{shown}' names {phrase}."),
         join_checks([direction, unit_check, bare_dollar]),
     ))
+}
+
+/// The unit that the size of a price's sample values points to, with what to say about it.
+/// Zeros say nothing: a credit can be 0 overnight in any unit. Under 1 is too small for cents and
+/// 2 or more is too large for dollars, so a set of values with any doubt gets no unit.
+fn unit_by_size(samples: &[&str]) -> (Option<ImportUnit>, String) {
+    let values: Vec<f64> = samples
+        .iter()
+        .filter_map(|cell| cell.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value != 0.0)
+        .collect();
+    if values.is_empty() {
+        return (
+            None,
+            "The header gives no currency, and the sample rows hold no value other than zero. \
+             Choose the unit."
+                .to_string(),
+        );
+    }
+    let listed = values
+        .iter()
+        .map(f64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let smallest = values.iter().fold(f64::INFINITY, |low, v| low.min(v.abs()));
+    let largest = values.iter().fold(0.0_f64, |high, v| high.max(v.abs()));
+    let reading = if largest < 1.0 {
+        Some((ImportUnit::UsdPerKilowattHour, "dollars"))
+    } else if smallest >= 1.0 && largest >= 2.0 {
+        Some((ImportUnit::CentsPerKilowattHour, "cents"))
+    } else {
+        None
+    };
+    match reading {
+        Some((unit, name)) => (
+            Some(unit),
+            format!(
+                "The header gives no currency. Values of {listed} read as {name} per kWh by size \
+                 alone; check that against a bill."
+            ),
+        ),
+        None => (
+            None,
+            format!(
+                "The header gives no currency, and values of {listed} do not clearly fit dollars \
+                 or cents per kWh. Choose the unit."
+            ),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3203,6 +3236,42 @@ mod tests {
             assert!(note.contains("US dollars"), "{header}: {note}");
             assert!(!note.contains("gives no currency"), "{header}: {note}");
         }
+    }
+
+    #[test]
+    fn a_price_with_no_currency_is_read_from_all_its_nonzero_values() {
+        const HEADER: &str = "Export Credit per kWh";
+        let read = |values: &[&str]| {
+            let found = suggest(&format!("{HEADER}\n{}\n", values.join("\n")));
+            let column = suggested(&found, HEADER).unwrap().clone();
+            assert_eq!(column.role, "export_price", "{values:?}");
+            (column.unit, column.check.unwrap())
+        };
+        // Cents, whatever comes first: a zero overnight, or a first value small enough for dollars.
+        for values in [
+            &["0", "0", "8.5", "8.5", "0"][..],
+            &["1.8", "7.5", "12"],
+            &["0", "1.8", "8.5"],
+        ] {
+            let (unit, check) = read(values);
+            assert_eq!(unit, Some(ImportUnit::CentsPerKilowattHour), "{values:?}");
+            assert!(check.contains("read as cents"), "{check}");
+        }
+        for values in [&["0.12", "0.08"][..], &["0", "0.1"], &["-0.02", "0.3"]] {
+            let (unit, check) = read(values);
+            assert_eq!(unit, Some(ImportUnit::UsdPerKilowattHour), "{values:?}");
+            assert!(check.contains("read as dollars"), "{check}");
+        }
+        // Values that fit neither, or both, get no unit, and it says so.
+        for values in [&["1.8", "1.8"][..], &["0.12", "8.5"], &["0.5", "1.5"]] {
+            let (unit, check) = read(values);
+            assert_eq!(unit, None, "{values:?}");
+            assert!(check.contains("do not clearly fit"), "{check}");
+            assert!(check.contains(values[0]), "{check}");
+        }
+        let (unit, check) = read(&["0", "0", "0"]);
+        assert_eq!(unit, None);
+        assert!(check.contains("no value other than zero"), "{check}");
     }
 
     #[test]

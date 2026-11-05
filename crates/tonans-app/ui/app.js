@@ -1256,6 +1256,10 @@ function dataSummary(dataset) {
       tiles.push(tile('Import price', `${profile.import_price.mean.toFixed(3)} USD/kWh`,
         `mean, from ${profile.import_price.min.toFixed(3)} to ${profile.import_price.max.toFixed(3)}`));
     }
+    if (profile.export_price) {
+      tiles.push(tile('Export credit', `${profile.export_price.mean.toFixed(3)} USD/kWh`,
+        `mean, from ${profile.export_price.min.toFixed(3)} to ${profile.export_price.max.toFixed(3)}`));
+    }
     box.appendChild(el('div', { class: 'tiles' }, tiles));
     box.appendChild(monthCharts(profile));
   }
