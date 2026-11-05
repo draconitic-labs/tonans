@@ -1898,6 +1898,11 @@ fn classify_price(
             as_written(header, word)
         ));
     }
+    if has(&IMPORT_WORDS) && has(&EXPORT_WORDS) {
+        return Err(format!(
+            "'{shown}' names both import and export. Choose a meaning, or ignore it."
+        ));
+    }
     if not_numbers {
         return Err(format!(
             "'{shown}' names a price, but its values are not numbers. Choose a meaning, or ignore it."
@@ -3247,6 +3252,27 @@ mod tests {
             assert!(note.contains(says), "{header}: {note}");
             assert!(note.contains("US dollars"), "{header}: {note}");
             assert!(!note.contains("gives no currency"), "{header}: {note}");
+        }
+    }
+
+    #[test]
+    fn a_price_naming_both_directions_is_refused() {
+        for header in [
+            "Import/Export Price ($/kWh)",
+            "Import Credit ($/kWh)",
+            "Buy/Sell Rate (USD/kWh)",
+            "Retail Export Rate ($/kWh)",
+        ] {
+            let found = suggest(&format!("{header}\n0.08\n"));
+            assert!(found.columns.is_empty(), "{header}: {found:?}");
+            assert!(found.notes[0].contains("both import and export"), "{found:?}");
+        }
+        for (header, role) in [
+            ("Import Price ($/kWh)", "import_price"),
+            ("Export Credit ($/kWh)", "export_price"),
+        ] {
+            let found = suggest(&format!("{header}\n0.08\n"));
+            assert_eq!(suggested(&found, header).unwrap().role, role);
         }
     }
 
