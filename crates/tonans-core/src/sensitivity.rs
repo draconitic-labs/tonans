@@ -363,8 +363,7 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
             "sensitivity.prices_move_baseline",
             format!(
                 "import and demand price axes apply to '{}' and to the baseline '{}' in every \
-                 cell, because a site pays the same prices whichever it picks. Each saving \
-                 compares the two at the same price.",
+                 cell. Each saving compares the two at the same price.",
                 scenario.name, baseline_spec.name
             ),
         ));
@@ -404,11 +403,7 @@ pub fn run(project: &Project, request: &SensitivityRequest) -> Result<Sensitivit
 
     ledger.push(Warning::info(
         "sensitivity.per_cell_simulation",
-        format!(
-            "each of these {} cells is a full simulation of the data set, not an interpolation. \
-             Cells vary only the axes shown; every other assumption is the scenario's.",
-            cells.len()
-        ),
+        "cells vary only the axes shown; every other assumption is the scenario's.",
     ));
 
     Ok(SensitivityResult {
@@ -477,7 +472,7 @@ fn validate_axes(axes: &[SensitivityAxis], scenario: &Scenario) -> Result<()> {
             limits::MAX_SENSITIVITY_AXES as u64,
             axes.len() as u64,
             format!(
-                "{} axes; Tonans charts up to {}. A third axis is a table nobody reads.",
+                "{} axes; the limit is {}.",
                 axes.len(),
                 limits::MAX_SENSITIVITY_AXES
             ),
@@ -558,7 +553,7 @@ fn validate_axes(axes: &[SensitivityAxis], scenario: &Scenario) -> Result<()> {
             limits::MAX_SENSITIVITY_CELLS as u64,
             cells as u64,
             format!(
-                "{cells} cells; the engine runs at most {}. Every cell is a full simulation.",
+                "{cells} cells; the limit is {}.",
                 limits::MAX_SENSITIVITY_CELLS
             ),
         ));
@@ -637,8 +632,7 @@ fn installed_cost_warning(request: &SensitivityRequest, scenario: &Scenario) -> 
             "sensitivity.installed_cost_held",
             format!(
                 "every cell keeps the scenario's installed cost of {} USD whatever its battery \
-                 size, so net present value and payback favour larger batteries. Treat them as \
-                 upper bounds, or vary installed cost as well.",
+                 size, so net present value and payback favour larger batteries.",
                 scenario.economics.capex_usd
             ),
         )

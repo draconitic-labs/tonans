@@ -297,8 +297,7 @@ pub fn import(
             allowed_gap as u64,
             format!(
                 "the gap policy would fill up to {allowed_gap} consecutive intervals, but a data \
-                 set holds at most {}. A gap policy patches holes in a file; it cannot be larger \
-                 than the file.",
+                 set holds at most {}.",
                 limits::MAX_INTERVALS
             ),
         ));
@@ -370,8 +369,7 @@ pub fn import(
             (synthesized_fraction * 100.0).ceil() as u64,
             format!(
                 "the gap policy would synthesize {synthesized} of {interval_count} intervals \
-                 ({pct:.1}%), above the {limit:.0}% ceiling. A file with this many holes is not \
-                 a data set. Fix the export at its source.",
+                 ({pct:.1}%), above the {limit:.0}% ceiling. Fix the export at its source.",
                 pct = synthesized_fraction * 100.0,
                 limit = limits::MAX_SYNTHESIZED_FRACTION * 100.0
             ),
@@ -406,9 +404,8 @@ pub fn import(
     if accumulator.saw_negative_import_price {
         warnings.push(Warning::caution(
             "data.negative_import_price",
-            "the import price is negative in at least one interval. That is legitimate in a \
-             wholesale market, and Tonans accounts for it, but it means importing energy can earn \
-             money — so a dispatch policy that avoids import is not necessarily the cheaper one.",
+            "the import price is negative in at least one interval, so importing energy can earn \
+             money and a dispatch policy that avoids import is not necessarily the cheaper one.",
         ));
     }
 
@@ -509,8 +506,7 @@ fn decode(bytes: &[u8]) -> Result<String> {
             None,
             None,
             format!(
-                "the file is not valid UTF-8 (byte {}). Re-export it as UTF-8; a mis-decoded file \
-                 would silently corrupt values.",
+                "the file is not valid UTF-8 (byte {}). Re-export it as UTF-8.",
                 e.valid_up_to()
             ),
         )
@@ -584,10 +580,7 @@ fn read_headers(reader: &mut csv::Reader<&[u8]>) -> Result<Vec<String>> {
                 "import.duplicate_header",
                 Some(1),
                 Some(header),
-                format!(
-                    "the header '{header}' appears more than once. Tonans will not guess which one \
-                     you meant."
-                ),
+                format!("the header '{header}' appears more than once."),
             ));
         }
         out.push(header.to_string());
@@ -761,9 +754,7 @@ impl ColumnPlan {
                 Some(&unclaimed[0]),
                 format!(
                     "these columns are neither mapped to a role nor listed as ignored: {}. Map each \
-                     one, or list it under ignore_columns. Tonans will not skip a column you have \
-                     not accounted for — the one time it matters, it was the column that held the \
-                     real data.",
+                     one, or list it under ignore_columns.",
                     unclaimed.join(", ")
                 ),
             ));
@@ -896,10 +887,7 @@ impl TimestampTracker {
                 "import.duplicate_timestamp",
                 Some(line),
                 Some("timestamp"),
-                format!(
-                    "timestamp {} appears twice in a row. Tonans will not choose one of them.",
-                    instant.to_rfc3339()
-                ),
+                format!("timestamp {} appears twice in a row.", instant.to_rfc3339()),
             ));
         }
         if instant < previous {
@@ -951,9 +939,8 @@ impl TimestampTracker {
                 Some(line),
                 Some("timestamp"),
                 format!(
-                    "{missing} interval(s) are missing between {} and {}. Tonans does not \
-                     interpolate. Fix the export, or deliberately choose a gap policy and accept \
-                     that the filled intervals are not measurements.",
+                    "{missing} interval(s) are missing between {} and {}. Fix the export, or \
+                     choose a gap policy.",
                     previous.to_rfc3339(),
                     instant.to_rfc3339()
                 ),
@@ -998,8 +985,8 @@ fn parse_naive(raw: &str, line: u64) -> Result<NaiveDateTime> {
         Some(line),
         Some("timestamp"),
         format!(
-            "'{raw}' is not a timestamp Tonans understands. Use RFC 3339 with an offset \
-             (2024-01-01T00:00:00-05:00), which is unambiguous, or one of: {}.",
+            "'{raw}' is not a readable timestamp. Use RFC 3339 with an offset \
+             (2024-01-01T00:00:00-05:00), or one of: {}.",
             NAIVE_FORMATS.join(", ")
         ),
     ))
@@ -1082,7 +1069,7 @@ pub fn suggest_mapping(preview: &CsvPreview) -> MappingSuggestion {
             columns.push(candidate.clone());
         } else if rivals[0] == candidate.header.trim() {
             notes.push(format!(
-                "{} could each be {}. Tonans left them for you to choose.",
+                "{} could each be {}.",
                 rivals
                     .iter()
                     .map(|header| format!("'{header}'"))
@@ -1625,13 +1612,12 @@ fn classify_column(
     if let Some((written, name)) = foreign_dollar(header) {
         return Err(match name {
             Some(name) => format!(
-                "'{shown}' is in {name}, written {written}, and Tonans works in US dollars. Convert \
-                 the column first, then choose its meaning and unit."
+                "'{shown}' is in {name}, written {written}, not US dollars. Convert the column \
+                 first, then choose its meaning and unit."
             ),
             None => format!(
-                "'{shown}' uses {written}, which Tonans does not recognize as US dollars, and Tonans \
-                 works in US dollars. If it is a price, convert it first, then choose its meaning \
-                 and unit."
+                "'{shown}' uses {written}, which is not recognized as US dollars. If it is a price, \
+                 convert it first, then choose its meaning and unit."
             ),
         });
     }
@@ -1662,15 +1648,13 @@ fn classify_column(
     if has(&TEMPERATURE_WORDS) || (has(&["dry"]) && has(&["bulb"])) {
         if has(&["kelvin", "k"]) {
             return Err(format!(
-                "'{shown}' states Kelvin. Tonans reads Celsius or Fahrenheit, so convert the column \
-                 first."
+                "'{shown}' states Kelvin. Convert the column to Celsius or Fahrenheit first."
             ));
         }
         if let Some(word) = first_unknown(&core, &[&TEMPERATURE_WORDS, &TEMPERATURE_QUALIFIERS]) {
             return Err(format!(
-                "'{shown}' names a temperature, but Tonans does not recognize '{}' in it. It reads \
-                 only the air temperature at the site, because that is what derating uses. Choose \
-                 a meaning if this is that, or ignore it.",
+                "'{shown}' names a temperature, but '{}' in it is not recognized. Only the air \
+                 temperature at the site is read. Choose a meaning if this is that, or ignore it.",
                 as_written(header, word)
             ));
         }
@@ -1706,8 +1690,7 @@ fn classify_column(
     }
     if names_load && names_generation {
         return Err(format!(
-            "'{shown}' names both load and generation, so Tonans cannot tell which it is. Choose a \
-             meaning, or ignore it."
+            "'{shown}' names both load and generation. Choose a meaning, or ignore it."
         ));
     }
     let names_critical = names_load && has(&CRITICAL_WORDS);
@@ -1753,8 +1736,7 @@ fn classify_column(
     if let Some(word) = unknown {
         // No role is named here: `Non_Critical_Load` is not nearly a critical load.
         return Err(format!(
-            "Tonans does not recognize '{}' in '{shown}', so it cannot tell what the column \
-             measures. Choose a meaning if you know, or ignore it.",
+            "'{}' in '{shown}' is not recognized. Choose a meaning if you know, or ignore it.",
             as_written(header, word)
         ));
     }
@@ -1821,11 +1803,11 @@ fn power_unit(
     let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
     let spelled = |spelling: &str| tokens.iter().any(|token| token == spelling);
     if spelled("mW") || spelled("mWh") {
-        return Err("'mW' is milliwatts, which Tonans does not read.".to_string());
+        return Err("'mW' is milliwatts, which cannot be read.".to_string());
     }
     if let Some((_, name)) = UNREAD_POWER_UNITS.iter().find(|(word, _)| has(&[*word])) {
         return Err(format!(
-            "it states {name}, which Tonans does not read for this column, so convert it to kW or \
+            "it states {name}, which cannot be read for this column, so convert it to kW or \
              kWh first."
         ));
     }
@@ -1867,8 +1849,8 @@ fn classify_price(
 
     if let Some((_, name)) = OTHER_CURRENCIES.iter().find(|(word, _)| has(&[*word])) {
         return Err(format!(
-            "'{shown}' is in {name}, and Tonans works in US dollars. Convert the column first, then \
-             choose its meaning and unit."
+            "'{shown}' is in {name}, not US dollars. Convert the column first, then choose its \
+             meaning and unit."
         ));
     }
     if has(&["demand", "charge", "charges", "fixed"])
@@ -1885,8 +1867,8 @@ fn classify_price(
             ]))
     {
         return Err(format!(
-            "'{shown}' is per kW or is a charge, not an energy price per kWh. Tonans reads energy \
-             prices from a file, and demand charges go on the tariff."
+            "'{shown}' is per kW or is a charge, not an energy price per kWh. Demand charges go on \
+             the tariff."
         ));
     }
     if let Some(word) = first_unknown(
@@ -1899,9 +1881,8 @@ fn classify_price(
         ],
     ) {
         return Err(format!(
-            "'{shown}' looks like money, but Tonans does not recognize '{}' in it. If it is a \
-             currency, Tonans works in US dollars and cannot read it. Choose a meaning if you know \
-             what it is, or ignore it.",
+            "'{shown}' looks like money, but '{}' in it is not recognized. Only US dollars can be \
+             read. Choose a meaning if you know what it is, or ignore it.",
             as_written(header, word)
         ));
     }
@@ -1930,7 +1911,7 @@ fn classify_price(
     let (unit, unit_check) = if has(&["mwh"]) {
         if !dollars || cents {
             return Err(format!(
-                "'{shown}' is per MWh, and Tonans reads that only in US dollars. Choose its meaning \
+                "'{shown}' is per MWh, which can be read only in US dollars. Choose its meaning \
                  and unit yourself, or convert it first."
             ));
         }
@@ -2052,8 +2033,7 @@ impl Accumulator {
                 "import.demand_period_gap",
                 None,
                 None,
-                "a timestamp gap cannot be filled while a demand-period column is mapped. Tonans \
-                 has no tariff calendar from which to reconstruct the missing period label; repair \
+                "a timestamp gap cannot be filled while a demand-period column is mapped. Repair \
                  the source rows or import without demand-period pricing.",
             ));
         }
@@ -2111,10 +2091,9 @@ impl Accumulator {
                             Some(line),
                             Some(&column.header),
                             format!(
-                                "{role} is {value} {unit}, which is negative. Tonans models load \
-                                 and generation as separate non-negative series; a net-metered \
-                                 column signed both ways cannot be separated back into the two, and \
-                                 Tonans will not try.",
+                                "{role} is {value} {unit}, which is negative. Load and generation \
+                                 must be separate non-negative series; a net-metered column signed \
+                                 both ways cannot be separated back into the two.",
                                 role = kind.as_str(),
                                 unit = kind.unit(),
                             ),
@@ -2243,10 +2222,7 @@ fn parse_value(raw: &str, line: u64, header: &str) -> Result<f64> {
             "import.empty_value",
             Some(line),
             Some(header),
-            format!(
-                "column '{header}' is empty on this row. An empty cell is not a zero and not a gap; \
-                 Tonans will not decide which you meant."
-            ),
+            format!("column '{header}' is empty on this row."),
         ));
     }
     if raw.len() > limits::MAX_CSV_FIELD_BYTES {
@@ -2273,7 +2249,7 @@ fn parse_value(raw: &str, line: u64, header: &str) -> Result<f64> {
             "import.non_finite",
             Some(line),
             Some(header),
-            format!("'{raw}' is not a finite number. Tonans will not substitute a value for it."),
+            format!("'{raw}' is not a finite number."),
         ));
     }
     if value.abs() > limits::MAX_ABS_VALUE {
@@ -2282,7 +2258,7 @@ fn parse_value(raw: &str, line: u64, header: &str) -> Result<f64> {
             Some(line),
             Some(header),
             format!(
-                "{value} exceeds the magnitude limit of {}. A real site reading never does.",
+                "{value} exceeds the magnitude limit of {}.",
                 limits::MAX_ABS_VALUE
             ),
         ));
@@ -3191,7 +3167,7 @@ mod tests {
                 found.notes
             );
             assert!(
-                found.notes[0].contains("does not recognize"),
+                found.notes[0].contains("is not recognized"),
                 "{:?}",
                 found.notes
             );
@@ -3216,9 +3192,9 @@ mod tests {
             ("price £/MWh", "GBP"),
             ("price_p_per_kwh", "pence"),
             ("Price_ZL_per_kWh", "PLN"),
-            ("Price (XX$/kWh)", "does not recognize"),
-            ("Price_QQQ_per_kWh", "does not recognize"),
-            ("price c/kWh", "does not recognize"),
+            ("Price (XX$/kWh)", "not recognized"),
+            ("Price_QQQ_per_kWh", "not recognized"),
+            ("price c/kWh", "not recognized"),
         ] {
             let found = suggest(&format!("{header}\n0.12\n"));
             assert!(found.columns.is_empty(), "{header}: {:?}", found.columns);
@@ -3263,7 +3239,7 @@ mod tests {
         assert!(note("load_mW").contains("milliwatts"));
         assert!(note("load kW kWh").contains("more than one unit"));
         assert!(note("Load_Setpoint_kW").contains("'Setpoint'"));
-        assert!(note("Load_kWh/h").contains("recognize 'h'"));
+        assert!(note("Load_kWh/h").contains("'h' in"));
         assert!(note("Solar_Irradiance_W/m2").contains("'Irradiance'"));
         assert!(note("BACKWARD_LOAD").contains("'BACKWARD'"));
         assert!(note("total_load_kwh").contains("running total"));
@@ -3272,7 +3248,7 @@ mod tests {
         assert!(note("temp_K").contains("Kelvin"));
         assert!(note("price_usd").contains("per what"));
         assert!(note("Credit_kWh").contains("amount rather than a price"));
-        assert!(note("demand_charge_usd").contains("demand charges go on the tariff"));
+        assert!(note("demand_charge_usd").contains("Demand charges go on the tariff"));
         assert!(note("Load_Less_PV_kW").contains("both load and generation"));
         assert!(note("Power (kW)").contains("Nothing in"));
     }

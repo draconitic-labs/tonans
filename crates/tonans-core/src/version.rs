@@ -28,7 +28,7 @@ pub const SUPPORT_EMAIL: &str = "support@flintglade.com";
 /// never contacts it.
 pub const SOURCE_URL: &str = "https://github.com/flintglade-tools/tonans";
 
-/// The disclaimer that must appear on every screen and in every exported artifact.
+/// The disclaimer shown under Help and in every exported artifact.
 ///
 /// [`crate::report`] and [`crate::provenance`] both embed this verbatim, and the
 /// report tests assert its presence, so it cannot be dropped by accident.

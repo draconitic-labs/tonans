@@ -118,7 +118,7 @@ impl IntervalGrid {
                 format!(
                     "the first interval begins at {} in {timezone}, which is not aligned to a \
                      {interval_minutes}-minute local clock boundary. Align the source export before \
-                     importing it so an interval cannot straddle a tariff hour or month.",
+                     importing it.",
                     local_start.to_rfc3339()
                 ),
             ));
@@ -133,8 +133,7 @@ impl IntervalGrid {
                         "interval boundary {index} lands at {} in {timezone}, which is not aligned \
                          to the {interval_minutes}-minute local clock after a timezone-offset \
                          transition. Use a shorter interval that remains locally aligned, or \
-                         provide a span that does not cross this transition, so an interval cannot \
-                         straddle a tariff hour or month.",
+                         provide a span that does not cross this transition.",
                         local.to_rfc3339()
                     ),
                 ));
@@ -270,8 +269,8 @@ pub fn resolve_local(
             Some("timestamp"),
             format!(
                 "local time {naive} occurs twice in {timezone} because of the daylight-saving \
-                 transition; it could mean {earliest_utc} or {latest_utc}. Tonans will not guess. \
-                 Re-export the data with UTC offsets (for example 2024-11-03T01:30:00-04:00).",
+                 transition; it could mean {earliest_utc} or {latest_utc}. Re-export the data with \
+                 UTC offsets (for example 2024-11-03T01:30:00-04:00).",
                 earliest_utc = earliest.with_timezone(&Utc).to_rfc3339(),
                 latest_utc = latest.with_timezone(&Utc).to_rfc3339(),
             ),

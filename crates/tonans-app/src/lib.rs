@@ -50,7 +50,7 @@ fn workspace_under(
         .or_else(|| usable(home).map(|home| home.join(".local/share")))
         .ok_or(Error::UnsafePath {
             code: "path.no_data_directory",
-            message: "Tonans could not work out where to store projects. Pass --workspace <DIR>."
+            message: "Could not work out where to store projects. Pass --workspace <DIR>."
                 .to_string(),
         })?;
     Ok(base.join("Flintglade").join("Tonans"))

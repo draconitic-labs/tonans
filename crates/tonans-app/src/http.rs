@@ -151,7 +151,7 @@ pub trait Handler: Send + Sync + 'static {
 pub fn internal_error() -> Response {
     Response::json(
         500,
-        r#"{"code":"http.internal","message":"Tonans hit an internal error handling this request, so it may or may not have finished. Check the result before trying again, and please report it."}"#,
+        r#"{"code":"http.internal","message":"Internal error handling this request. It may or may not have finished. Check the result before trying again, and please report it."}"#,
     )
 }
 
@@ -212,7 +212,7 @@ pub fn serve<H: Handler>(
                     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
                     let response = Response::json(
                         503,
-                        r#"{"code":"http.busy","message":"Tonans is busy; retry shortly."}"#,
+                        r#"{"code":"http.busy","message":"Busy; retry shortly."}"#,
                     );
                     let _ = write_response(&mut stream, &response);
                     let _ = stream.shutdown(Shutdown::Both);

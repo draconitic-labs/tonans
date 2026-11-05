@@ -115,7 +115,7 @@ pub struct Session {
     pub workspace: String,
     /// The reserved name of the bundled demonstration project.
     pub demo_project: String,
-    /// The planning-only disclaimer, so the UI cannot render without it.
+    /// The planning-only disclaimer, shown under Help.
     pub disclaimer: String,
     /// What the model does not do.
     pub model_exclusions: Vec<String>,
@@ -249,8 +249,7 @@ pub fn save_project(state: &AppState, name: &str, request: &Request) -> Response
             return Err(Error::validation(
                 "validation.project_name_mismatch",
                 "project.name",
-                "the project in the body does not have the name in the URL. Tonans will not rename a \
-                 project as a side effect of saving it.",
+                "the project in the body does not have the name in the URL.",
             ));
         }
         project.modified_utc = clock::now_utc();
@@ -312,7 +311,7 @@ fn decode_file_name(header: Option<&str>) -> Result<String> {
         Error::validation(
             "validation.bad_file_name",
             "upload.filename",
-            "the file name was not encoded in a way Tonans can read",
+            "the file name's encoding could not be read",
         )
     })?;
     source_file_name(&decoded)
@@ -412,9 +411,7 @@ pub fn import(state: &AppState, name: &str, request: &Request) -> Response {
         if staged.synthetic {
             report.dataset.import_warnings.push(Warning::caution(
                 "data.synthetic_sample",
-                "this data is the bundled synthetic sample, not a real site's meter export. \
-                 Every number derived from it is an illustration of the model, not a finding \
-                 about a building.",
+                "this data is the bundled synthetic sample, not a real site's meter export.",
             ));
         }
 

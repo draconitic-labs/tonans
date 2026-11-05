@@ -183,8 +183,7 @@ async fn save_bundle(
         CommandError::new(
             "desktop.bundle_folder",
             format!(
-                "could not create {}: {e}. A bundle is never copied over an existing folder; \
-                 choose another location.",
+                "could not create {}: {e}. Choose another location.",
                 destination.display()
             ),
         )

@@ -205,7 +205,7 @@ impl Router {
             return Some(problem(
                 403,
                 "server.bad_host",
-                "This request did not arrive at the address Tonans is serving.",
+                "This request did not arrive at the address being served.",
             ));
         }
 
@@ -237,8 +237,7 @@ impl Router {
                 return Some(problem(
                     401,
                     "server.unauthorized",
-                    "This request carried no valid launch token. Tonans mints one per launch and \
-                     hands it to the page it serves.",
+                    "This request carried no valid launch token.",
                 ));
             }
 
@@ -249,8 +248,7 @@ impl Router {
                 return Some(problem(
                     429,
                     "server.rate_limited",
-                    "Too many requests. Tonans is a single-user local application; this many \
-                     requests in this short a time means something is looping.",
+                    "Too many requests.",
                 ));
             }
         }
@@ -271,7 +269,7 @@ impl Router {
             ("GET", ["palette.css"]) => assets::palette(),
             ("GET", ["favicon.svg"]) => assets::favicon(),
             ("GET", ["fonts", name]) => assets::font(name).unwrap_or_else(|| {
-                problem(404, "server.not_found", "Tonans does not ship that font.")
+                problem(404, "server.not_found", "No such font.")
             }),
 
             ("GET", ["api", "session"]) => api::session(state),
@@ -312,7 +310,7 @@ impl Router {
             _ => problem(
                 404,
                 "server.not_found",
-                "No such route. Tonans serves only its own application and API.",
+                "No such route.",
             ),
         }
     }

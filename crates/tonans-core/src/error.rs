@@ -193,8 +193,7 @@ impl Error {
         Error::NonFinite {
             message: format!(
                 "internal error: {field} evaluated to {value}, which is not a finite number. \
-                 This is a defect in Tonans, not a problem with your input. Report it to \
-                 {support} with the project file.",
+                 This is a defect in Tonans. Report it to {support} with the project file.",
                 support = crate::version::SUPPORT_EMAIL
             ),
             field,

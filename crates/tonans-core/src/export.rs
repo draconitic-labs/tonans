@@ -170,7 +170,7 @@ fn write_bundle_into(
         &mut artifacts,
         "report.html",
         report_html.as_bytes(),
-        "Self-contained HTML report. No script, no network access, opens from disk.",
+        "Self-contained HTML report.",
     )?;
 
     let summary = canonical_json(run)?;
@@ -200,7 +200,7 @@ fn write_bundle_into(
             &mut artifacts,
             &name,
             timeseries_csv(scenario).as_bytes(),
-            "Every interval at full resolution. The charts in the report are decimated; this is not.",
+            "Every interval at full resolution.",
         )?;
     }
 
@@ -217,7 +217,7 @@ fn write_bundle_into(
             &name,
             sensitivity_csv(study).as_bytes(),
             &format!(
-                "Every server-computed cell of sensitivity study {} for scenario '{}'.",
+                "Every cell of sensitivity study {} for scenario '{}'.",
                 index + 1,
                 study.scenario_id
             ),

@@ -918,7 +918,7 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
     html.push_str("</tbody>\n</table></div>\n");
     let _ = writeln!(
         html,
-        "<p class=\"muted\">{method} Energy savings escalate at the stated rate; operating and throughput costs are held constant in nominal terms. There is no tax, incentive, depreciation, or residual value in this model — Tonans would have to guess at all four, and a guess in a financial model is worse than an absence.</p>",
+        "<p class=\"muted\">{method} This is a transparent approximation, not an electrochemical lifetime model. Energy savings escalate at the stated rate; operating and throughput costs are held constant in nominal terms. There is no tax, incentive, depreciation, or residual value in this model — Tonans would have to guess at all four, and a guess in a financial model is worse than an absence.</p>",
         method = escape(&economics.degradation_method)
     );
 }

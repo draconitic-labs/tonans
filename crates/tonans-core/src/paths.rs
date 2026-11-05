@@ -72,7 +72,7 @@ fn safe_name_within(kind: &str, name: &str, limit: usize) -> Result<String> {
     if name.contains('/') || name.contains('\\') {
         return Err(reject(
             "path.separator",
-            "it contains a path separator. Tonans addresses projects and files by name, never by path.",
+            "it contains a path separator",
         ));
     }
     if name.contains(':') {
@@ -145,10 +145,7 @@ pub fn project_file_name(project_name: &str) -> Result<String> {
     if name.contains('.') {
         return Err(Error::UnsafePath {
             code: "path.extension_in_name",
-            message:
-                "that project name cannot be used: it contains a dot. Tonans chooses the file \
-                      extension itself."
-                    .to_string(),
+            message: "that project name cannot be used: it contains a dot".to_string(),
         });
     }
     Ok(format!("{name}.tonans.json"))
@@ -197,8 +194,7 @@ pub fn confine(root: &std::path::Path, name: &str) -> Result<std::path::PathBuf>
     if resolved_parent != resolved_root {
         return Err(Error::UnsafePath {
             code: "path.escapes_workspace",
-            message: "that name cannot be used: it resolves outside the Tonans workspace"
-                .to_string(),
+            message: "that name cannot be used: it resolves outside the workspace".to_string(),
         });
     }
     Ok(candidate)

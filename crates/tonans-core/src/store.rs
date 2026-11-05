@@ -211,8 +211,7 @@ impl Workspace {
             return Err(Error::Schema {
                 code: "schema.project_name_mismatch",
                 message: format!(
-                    "the project file named '{name}' identifies itself as '{}'. Tonans will not \
-                     load or rewrite a project under a different name.",
+                    "the project file named '{name}' identifies itself as '{}'.",
                     project.name
                 ),
             });
@@ -244,7 +243,7 @@ impl Workspace {
                 "limit.project_bytes",
                 limits::MAX_PROJECT_BYTES as u64,
                 metadata.len(),
-                format!("the project file for '{name}' is larger than Tonans will open"),
+                format!("the project file for '{name}' is over the size limit"),
             ));
         }
         fs::read(&path).map_err(|e| Error::io(format!("reading the project '{name}'"), e))
@@ -260,8 +259,7 @@ impl Workspace {
         if fs::symlink_metadata(&path).is_ok_and(|m| metadata_is_reparse(&m)) {
             return Err(Error::UnsafePath {
                 code: "path.reparse_lock",
-                message: "the workspace's lock file is a link, which Tonans will not follow"
-                    .to_string(),
+                message: "the workspace's lock file is a link".to_string(),
             });
         }
         let file = OpenOptions::new()
@@ -294,7 +292,7 @@ impl Workspace {
             code: "conflict.project_changed",
             message: format!(
                 "'{}' was changed somewhere else after this window read it, probably in \
-                 another Tonans window. Nothing was saved, so that change is intact.",
+                 another Tonans window. Nothing was saved.",
                 project.name
             ),
         };
@@ -345,7 +343,7 @@ impl Workspace {
                 "limit.project_bytes",
                 limits::MAX_PROJECT_BYTES as u64,
                 json.len() as u64,
-                "this project is larger than Tonans will write",
+                "this project is over the size limit",
             ));
         }
 
@@ -453,7 +451,7 @@ fn verified_child_directory(parent: &Path, candidate: &Path, label: &str) -> Res
         return Err(Error::UnsafePath {
             code: "path.reparse_directory",
             message: format!(
-                "the {label} directory is not a direct physical directory inside the Tonans workspace"
+                "the {label} directory is not a direct physical directory inside the workspace"
             ),
         });
     }
@@ -478,7 +476,7 @@ fn verified_existing_file(parent: &Path, candidate: &Path, label: &str) -> Resul
     if metadata_is_reparse(&metadata) || !metadata.is_file() {
         return Err(Error::UnsafePath {
             code: "path.reparse_file",
-            message: format!("the {label} is not a regular file inside the Tonans workspace"),
+            message: format!("the {label} is not a regular file inside the workspace"),
         });
     }
     let resolved = candidate

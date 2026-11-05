@@ -93,7 +93,7 @@ impl AppState {
                 "limit.csv_bytes",
                 limits::MAX_CSV_BYTES as u64,
                 bytes.len() as u64,
-                "the uploaded file is larger than Tonans will read",
+                "the uploaded file is over the size limit",
             ));
         }
         let id = crate::token::opaque_id();
@@ -146,10 +146,7 @@ impl AppState {
         if let Some(running) = slot.as_ref() {
             return Err(Error::Conflict {
                 code: "server.busy",
-                message: format!(
-                    "Tonans is already running {running}. It does one of these at a time, so try \
-                     again when that finishes."
-                ),
+                message: format!("Already running {running}. Try again when that finishes."),
             });
         }
         *slot = Some(format!("{what} of '{project}'"));

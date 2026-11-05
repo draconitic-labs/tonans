@@ -160,8 +160,7 @@ pub fn evaluate(
             format!(
                 "the data set covers {hours:.0} hours, so every annual figure below is the \
                  simulated period multiplied by {factor:.3}. Demand charges and seasonal load do \
-                 not scale with elapsed time, so treat these figures as indicative only. Import a \
-                 full year for economics you can defend.",
+                 not scale with elapsed time.",
                 hours = energy.duration_hours,
                 factor = annualization_multiplier
             ),
@@ -354,7 +353,7 @@ pub fn evaluate(
         "Compounding fade approximation: {calendar:.2}% per year (calendar) + {cycle:.4}% per \
          equivalent full cycle x {cycles:.1} cycles per year = {total:.2}% per year, each year's \
          loss taken from the capacity left after the year before. Benefit in later years is \
-         {scaling}. This is a transparent approximation, not an electrochemical lifetime model.",
+         {scaling}.",
         calendar = degradation.calendar_fade_pct_per_year,
         cycle = degradation.cycle_fade_pct_per_cycle,
         cycles = equivalent_full_cycles_per_year,
@@ -595,9 +594,6 @@ mod tests {
         assert!((result.cash_flow[1].gross_savings_usd - 980.0).abs() < 1e-9);
         assert!((result.cash_flow[2].gross_savings_usd - 960.4).abs() < 1e-9);
         assert!((result.final_capacity_retention_pct - 96.04 * 0.98).abs() < 1e-9);
-        assert!(result
-            .degradation_method
-            .contains("not an electrochemical lifetime model"));
 
         // Constant scaling holds the benefit flat, whatever the fade.
         let mut constant = scenario.clone();

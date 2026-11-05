@@ -321,8 +321,7 @@ impl Site {
                 "validation.unsupported_currency",
                 "site.currency",
                 format!(
-                    "currency '{}' is not supported; this build handles USD only. \
-                     Tonans will not render a number as money in a currency it cannot label.",
+                    "currency '{}' is not supported; this build handles USD only.",
                     self.currency
                 ),
             ));
@@ -1714,8 +1713,7 @@ pub fn migrate(json: &str) -> Result<Project> {
             code: "schema.version_from_the_future",
             message: format!(
                 "this project was written by a newer Tonans (schema version {newer}); this build \
-                 understands version {SCHEMA_VERSION}. Upgrade Tonans to open it. Tonans will not \
-                 guess at fields it does not know."
+                 understands version {SCHEMA_VERSION}. Upgrade Tonans to open it."
             ),
         }),
     }
