@@ -927,7 +927,8 @@ function firstInvalidField() {
  * normally, and different bytes are refused as a change.
  */
 async function revisionToSave(stamp) {
-  if (!state.projectMissing) return stamp.revision;
+  // A failed Reopen means a bad file, and moving it out of the way is the way out.
+  if (!state.projectMissing && !state.reopenError) return stamp.revision;
   try {
     await api(projectPath('/revision'));
   } catch (error) {
