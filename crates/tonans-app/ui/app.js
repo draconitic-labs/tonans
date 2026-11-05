@@ -982,6 +982,7 @@ async function writeProject() {
   // Results were produced from the old assumptions and are now stale. Throwing them
   // away is the only honest thing to do: a chart next to assumptions it was not
   // produced from is worse than no chart.
+  const hadResults = Boolean(state.run);
   dropDerivedResults();
   markSaved();
   if (typedSince) {
@@ -992,7 +993,7 @@ async function writeProject() {
   // The inputs on screen are bound to the object just replaced. Redraw them, or the
   // next edit changes that old object and the next save silently drops it.
   show(state.view, { keepScroll: true });
-  toast('Saved. Run again to refresh results.', null, true);
+  toast(hadResults ? 'Saved. Run again to refresh results.' : 'Saved.', null, true);
   await refreshProjects();
   return reply.body;
 }
@@ -2278,13 +2279,15 @@ function scheduleEditor(dispatch, prefix) {
       } })),
     ]));
   });
-  box.appendChild(el('div', { class: 'scroll' }, el('table', {}, [
-    el('thead', {}, el('tr', {}, [
-      el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }),
-      el('th', { text: 'Battery power (kW, + discharges)' }), el('th', {}),
-    ])),
-    body,
-  ])));
+  if (dispatch.entries?.length) {
+    box.appendChild(el('div', { class: 'scroll' }, el('table', {}, [
+      el('thead', {}, el('tr', {}, [
+        el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }),
+        el('th', { text: 'Battery power (kW, + discharges)' }), el('th', {}),
+      ])),
+      body,
+    ])));
+  }
   box.appendChild(el('div', { class: 'row' }, el('button', { type: 'button', text: 'Add a setpoint window', onclick: () => {
     change('add a setpoint window', () => {
       const start = state.project.dataset?.start_utc || new Date().toISOString();
@@ -2314,12 +2317,12 @@ function outageSection(scenario, prefix) {
   });
   return section('outage', 'Outages to replay',
     windows.length ? `${windows.length} window${windows.length === 1 ? '' : 's'}` : 'None', [
-      el('div', { class: 'scroll' }, el('table', {}, [
+      windows.length ? el('div', { class: 'scroll' }, el('table', {}, [
         el('thead', {}, el('tr', {}, [
           el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }), el('th', { text: 'Label' }), el('th', {}),
         ])),
         body,
-      ])),
+      ])) : null,
       el('div', { class: 'row' }, [
         el('button', { type: 'button', text: 'Add an outage window', onclick: () => {
           change('add an outage window', () => {

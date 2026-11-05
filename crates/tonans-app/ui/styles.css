@@ -161,7 +161,7 @@ a { color: var(--c-load); }
   font-size: 13.5px;
 }
 .next .next-label { font: 600 13.5px var(--font-label); }
-.next button { padding: 2px 10px; }
+.next button { padding: 2px 10px; flex: none; }
 
 /* ------------------------------------------------------------------ forms */
 
