@@ -178,7 +178,8 @@ Tariff support includes:
 
 Demand and fixed charges are billed once for every calendar month the data touches at the site's
 time zone, in full, however little of that month the data covers. A year of data that starts mid
-month, or a year stamped in UTC for a site elsewhere, touches 13. Those 13 full charges stay in
+month, is stamped at the end of each hour, or is stamped in UTC for a site elsewhere, touches 13.
+Those 13 full charges stay in
 the grid cost, savings, and net present value, because scaling them would be a guess about a bill
 Tonans has not seen. In one test year of 8,760 hours, starting on the first of the month gave 71,600
 USD of annual grid cost, starting on July 15 gave 72,700 USD, and five hours of December cost a full

@@ -52,10 +52,10 @@ What else moves with this version:
   hashes do not move.
 - **Fade wording.** The texts called fade linear, and it has always compounded: usable capacity is
   `initial x (1 - r)^(n - 1)` in year `n`. No number changes.
-- **Wording of warnings.** The months-billed warning and other warnings were reworded, and a study
-  keeps its warnings inside its identity hash, so a study's hash and the key of an export that
-  includes one move from earlier builds of this version. `model_input_hash` and `results_hash` do
-  not move, and no number changes.
+- **Wording of warnings.** The months-billed warning and other warnings were reworded. A study keeps
+  its warnings inside its identity hash, and an export's key covers the project and its warnings, so
+  a study's hash and an export's key move from earlier builds of this version. `model_input_hash` and
+  `results_hash` do not move, and no number changes.
 
 Other results that could have been wrong before this version, none of which changes the model:
 
@@ -78,6 +78,11 @@ Other results that could have been wrong before this version, none of which chan
   the figures on the data screen against a bill. A column now gets a role only when every word of
   its header is recognized and states both the meaning and the unit. **A suggestion is still only a
   suggestion:** it reads a header and not your data, and it always needs your review.
+- **A price per kWh with no currency could be 100 times wrong.** Its first value alone chose dollars
+  or cents, so a credit of 0 overnight and 8.5 cents later was suggested as USD/kWh, with only a
+  Check line to catch it. If you accepted a suggestion for such a column, compare the price tiles on
+  the data screen with a bill. All the sample rows now decide, ignoring zeros, and values that do
+  not clearly fit one unit get no unit.
 
 Also changed in what the screen says:
 
@@ -85,3 +90,7 @@ Also changed in what the screen says:
 - The best cell of a study states the axis value exactly, so it no longer reads 1 for 0.80.
 - The Flat energy price preset no longer keeps an earlier demand charge.
 - The annual grid cost tile says when its figure is scaled from a short file.
+- The always-on banner, the status bar's loopback line, and other text about Tonans itself are gone
+  from the window. The limits are under Help, in every report, and in `docs/MODEL.md`.
+- A study with a price axis shows no best-cell panel, because a price is not a design to pick.
+- The data screen has an export credit tile, as it has for the import price.

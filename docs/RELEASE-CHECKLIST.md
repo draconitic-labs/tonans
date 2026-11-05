@@ -47,6 +47,17 @@ virtual X display, with no session bus and no window manager, and driven by an A
 and dark. Every pass started from a clean launch, with the display checked to hold no other
 program's window. The second window below was opened on purpose.
 
+Walked again on the same setup, at 1600x950, at source revision `488ffd9` with a release binary
+of SHA-256 `fdf9bdc23f4b14ef...`, once the commentary was out of the window: the empty state, every
+screen from a clean launch, each dispatch policy and add-scenario template, a study on an energy
+axis and one on a price axis, which showed no best-cell panel, and an export. A file with `P_Load_kW`,
+`Gen_MW`, `Export Credit per kWh` holding 0 overnight and 8.5 later, `Retail Price (c/kWh)`,
+`OA Temp (°F)`, and `Critical Power (kW)` got all its columns suggested, with a Check on the three
+that need one, and its export credit tile read 0.000 to 0.085 USD/kWh. `Feed-in Rate per kWh` holding
+1.2 to 1.8 got its role and no unit. A project file put back while the window kept focus saved with
+no dialog. After Reopen failed on a corrupted file, moving the file away and pressing Save wrote the
+edits. The bundled demo's model input and results hashes did not move.
+
 - **Import:** `samples/riverside-works-2024.csv` through the native file picker. The
   explicit suggestion mapped 8 of 8 columns, flagged two prices whose currency the file does
   not state, and held the import until the review box was ticked. Importing with nothing
