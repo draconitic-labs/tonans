@@ -1139,7 +1139,8 @@ fn split_camel_case(raw: &str, tokens: &mut Vec<String>) {
     if raw.is_empty() {
         return;
     }
-    if UNIT_WORDS.contains(&raw.to_lowercase().as_str()) {
+    // `FiT` is one word, the short form of a feed-in tariff.
+    if UNIT_WORDS.contains(&raw.to_lowercase().as_str()) || raw.eq_ignore_ascii_case("fit") {
         tokens.push(raw.to_string());
         return;
     }
@@ -1185,11 +1186,22 @@ fn header_tokens(header: &str) -> Vec<String> {
 
 /// The header's words, lowercased. `Load (kW)`, `load_kW`, `loadKw`, `kWLoad` and `LoadkW`
 /// all give `load` and `kw`. Spelled-out energy units become one word: `kilowatt hours`,
-/// `kW-hr`, and `kWhr` are all `kwh`.
+/// `kW-hr`, and `kWhr` are all `kwh`. So does a feed-in: `Feed-in`, `Feed In`, and `FeedIn` are
+/// all `feedin`, and `in` means nothing else here.
 fn header_words(tokens: &[String]) -> Vec<String> {
     let mut words: Vec<String> = Vec::with_capacity(tokens.len());
     for token in tokens {
         let lower = token.to_lowercase();
+        if lower == "in" && words.last().is_some_and(|word| word == "feed") {
+            words.pop();
+            words.push("feedin".to_string());
+            continue;
+        }
+        if lower == "feedintariff" {
+            words.push("feedin".to_string());
+            words.push("tariff".to_string());
+            continue;
+        }
         if matches!(lower.as_str(), "hr" | "hrs" | "hour" | "hours") {
             let energy = match words.last().map(String::as_str) {
                 Some("kw" | "kilowatt" | "kilowatts") => Some("kwh"),
@@ -1367,8 +1379,8 @@ const IMPORT_WORDS: [&str; 6] = [
 ];
 
 /// Words that say a price is for energy sold.
-const EXPORT_WORDS: [&str; 7] = [
-    "export", "exported", "sell", "sold", "feed", "feedin", "credit",
+const EXPORT_WORDS: [&str; 8] = [
+    "export", "exported", "sell", "sold", "feed", "feedin", "fit", "credit",
 ];
 
 /// Everything else a price header may say, including the money and the energy.
@@ -3236,6 +3248,37 @@ mod tests {
             assert!(note.contains("US dollars"), "{header}: {note}");
             assert!(!note.contains("gives no currency"), "{header}: {note}");
         }
+    }
+
+    #[test]
+    fn every_spelling_of_a_feed_in_tariff_is_an_export_credit() {
+        for header in [
+            "Feed-in Tariff ($/kWh)",
+            "Feed In Tariff ($/kWh)",
+            "FeedIn Tariff ($/kWh)",
+            "FeedInTariff ($/kWh)",
+            "Feedin Tariff ($/kWh)",
+            "feedintariff_usd_per_kwh",
+            "feed_in_tariff_usd_per_kwh",
+            "FEED-IN TARIFF (USD/KWH)",
+            "Feed-in Rate ($/kWh)",
+            "Feed-in Credit ($/kWh)",
+            "Feed-in Price ($/kWh)",
+            "FiT ($/kWh)",
+            "FIT (USD/kWh)",
+            "fit_usd_per_kwh",
+        ] {
+            let found = suggest(&format!("{header}\n0.08\n"));
+            let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
+            assert_eq!(column.role, "export_price", "{header}");
+            assert_eq!(column.unit, Some(ImportUnit::UsdPerKilowattHour), "{header}");
+        }
+        // `in` is a word only after `feed`.
+        let found = suggest("Price in Tariff ($/kWh)\n0.08\n");
+        assert!(found.columns.is_empty(), "{found:?}");
+        // And `fit` needs money beside it, as any other word for a direction does.
+        let found = suggest("Fit (kW)\n5\n");
+        assert!(found.columns.is_empty(), "{found:?}");
     }
 
     #[test]
