@@ -1584,9 +1584,10 @@ fn first_unknown<'a>(words: &[&'a str], lists: &[&[&str]]) -> Option<&'a str> {
 
 /// The piece of the header a word came from, as the user wrote it.
 fn as_written<'a>(header: &'a str, word: &'a str) -> &'a str {
-    header
-        .split(|c: char| !c.is_alphanumeric())
-        .find(|run| run.to_lowercase().contains(word))
+    let runs = || header.split(|c: char| !c.is_alphanumeric());
+    runs()
+        .find(|run| run.to_lowercase() == word)
+        .or_else(|| runs().find(|run| run.to_lowercase().contains(word)))
         .unwrap_or(word)
 }
 
@@ -1750,9 +1751,10 @@ fn classify_column(
         )
     };
     if let Some(word) = unknown {
+        // No role is named here: `Non_Critical_Load` is not nearly a critical load.
         return Err(format!(
-            "'{shown}' looks like {phrase}, but Tonans does not recognize '{}' in it, so it cannot \
-             tell what the column measures. Choose a meaning if you know, or ignore it.",
+            "Tonans does not recognize '{}' in '{shown}', so it cannot tell what the column \
+             measures. Choose a meaning if you know, or ignore it.",
             as_written(header, word)
         ));
     }
@@ -3184,12 +3186,12 @@ mod tests {
         ] {
             let found = suggest(&format!("{header}\n1\n"));
             assert!(
-                !found.notes[0].contains("names a critical load"),
+                !found.notes[0].contains("a critical load"),
                 "{:?}",
                 found.notes
             );
             assert!(
-                found.notes[0].to_lowercase().contains("non"),
+                found.notes[0].contains("does not recognize"),
                 "{:?}",
                 found.notes
             );
@@ -3261,6 +3263,8 @@ mod tests {
         assert!(note("load_mW").contains("milliwatts"));
         assert!(note("load kW kWh").contains("more than one unit"));
         assert!(note("Load_Setpoint_kW").contains("'Setpoint'"));
+        assert!(note("Load_kWh/h").contains("recognize 'h'"));
+        assert!(note("Solar_Irradiance_W/m2").contains("'Irradiance'"));
         assert!(note("BACKWARD_LOAD").contains("'BACKWARD'"));
         assert!(note("total_load_kwh").contains("running total"));
         assert!(note("net_load_kw").contains("twice"));
