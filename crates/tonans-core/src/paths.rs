@@ -23,8 +23,14 @@
 
 use crate::error::{Error, Result};
 
-/// Longest accepted file or project name, in characters.
+/// Longest accepted file or project name, in characters. A project's name becomes a file and a
+/// folder, so this leaves room in a Windows path.
 const MAX_FILENAME_CHARS: usize = 96;
+
+/// Longest name accepted for a file the user chose to import. It is only ever a label in the audit
+/// trail and is never written to disk, and utility exports run long, so the limit is what a
+/// filesystem would allow.
+const MAX_SOURCE_FILENAME_CHARS: usize = 255;
 
 /// Windows device names. Reserved with *any* extension, and case-insensitively.
 const RESERVED_DEVICE_NAMES: &[&str] = &[
@@ -39,6 +45,10 @@ const RESERVED_DEVICE_NAMES: &[&str] = &[
 /// user asked for. A name Tonans cannot store is an error the user gets to see
 /// and fix, not a name Tonans quietly invents.
 pub fn safe_name(kind: &str, name: &str) -> Result<String> {
+    safe_name_within(kind, name, MAX_FILENAME_CHARS)
+}
+
+fn safe_name_within(kind: &str, name: &str, limit: usize) -> Result<String> {
     let reject = |code: &'static str, reason: &str| -> Error {
         // The rejected bytes are never echoed back. A name is under an attacker's
         // control, and this message reaches a log, a terminal, and an HTML page.
@@ -52,18 +62,15 @@ pub fn safe_name(kind: &str, name: &str) -> Result<String> {
         return Err(reject("path.empty", "it is empty"));
     }
     let char_count = name.chars().count();
-    if char_count > MAX_FILENAME_CHARS {
+    if char_count > limit {
         return Err(reject(
             "path.too_long",
-            &format!("it is {char_count} characters; the limit is {MAX_FILENAME_CHARS}"),
+            &format!("it is {char_count} characters; the limit is {limit}"),
         ));
     }
 
     if name.contains('/') || name.contains('\\') {
-        return Err(reject(
-            "path.separator",
-            "it contains a path separator. Tonans addresses projects and files by name, never by path.",
-        ));
+        return Err(reject("path.separator", "it contains a path separator"));
     }
     if name.contains(':') {
         return Err(reject(
@@ -135,10 +142,7 @@ pub fn project_file_name(project_name: &str) -> Result<String> {
     if name.contains('.') {
         return Err(Error::UnsafePath {
             code: "path.extension_in_name",
-            message:
-                "that project name cannot be used: it contains a dot. Tonans chooses the file \
-                      extension itself."
-                    .to_string(),
+            message: "that project name cannot be used: it contains a dot".to_string(),
         });
     }
     Ok(format!("{name}.tonans.json"))
@@ -159,7 +163,7 @@ pub fn project_file_name(project_name: &str) -> Result<String> {
 /// least defensible. It is refused instead, like every other name Tonans cannot
 /// take at face value.
 pub fn source_file_name(supplied: &str) -> Result<String> {
-    safe_name("file name", supplied)
+    safe_name_within("file name", supplied, MAX_SOURCE_FILENAME_CHARS)
 }
 
 /// Join `name` beneath `root`, refusing anything that could escape it.
@@ -187,8 +191,7 @@ pub fn confine(root: &std::path::Path, name: &str) -> Result<std::path::PathBuf>
     if resolved_parent != resolved_root {
         return Err(Error::UnsafePath {
             code: "path.escapes_workspace",
-            message: "that name cannot be used: it resolves outside the Tonans workspace"
-                .to_string(),
+            message: "that name cannot be used: it resolves outside the workspace".to_string(),
         });
     }
     Ok(candidate)
@@ -317,6 +320,24 @@ mod tests {
         assert_eq!(safe_name("f", "").unwrap_err().code(), "path.empty");
         let long = format!("{}.csv", "a".repeat(MAX_FILENAME_CHARS));
         assert_eq!(safe_name("f", &long).unwrap_err().code(), "path.too_long");
+    }
+
+    #[test]
+    fn a_long_export_name_is_a_good_source_file_name_but_not_a_good_project_name() {
+        // 103 characters, as a utility's export really was.
+        let name = format!("{}.csv", "interval_data_account_0012345_meter_".repeat(3));
+        let name = format!("{}{}", &name[..103 - 4], ".csv");
+        assert_eq!(name.chars().count(), 103);
+        assert_eq!(source_file_name(&name).unwrap(), name);
+        assert_eq!(
+            safe_name("project name", &name).unwrap_err().code(),
+            "path.too_long"
+        );
+
+        let at_limit = "a".repeat(MAX_SOURCE_FILENAME_CHARS);
+        assert!(source_file_name(&at_limit).is_ok());
+        let over = "a".repeat(MAX_SOURCE_FILENAME_CHARS + 1);
+        assert_eq!(source_file_name(&over).unwrap_err().code(), "path.too_long");
     }
 
     #[test]

@@ -31,5 +31,6 @@ jobs:
         run: rustup toolchain install 1.96.1 --profile minimal
       - name: Install locked advisory checker
         run: cargo install cargo-audit --version 0.22.2 --locked
+      # `.cargo/audit.toml` lists the accepted advisories, with reasons. Anything else fails.
       - name: Audit locked dependency graph
-        run: cargo audit
+        run: cargo audit --deny warnings

@@ -1032,7 +1032,7 @@ pub fn run(
         ledger.push(Warning::info(
             "model.grid_charging_enabled",
             "this scenario charges the battery from the grid. That raises imported energy and can \
-             raise the demand charge; both are accounted for below.",
+             raise the demand charge.",
         ));
     }
     if totals.initial_origin_battery_to_load_kwh > EPSILON_KWH {
@@ -1040,8 +1040,8 @@ pub fn run(
             "model.initial_energy_excluded_from_self_sufficiency",
             format!(
                 "{:.1} kWh of load was served from energy present in the battery before the model \
-                 began. Its source is unknown, so Tonans conservatively excludes it from the \
-                 self-sufficiency percentage.",
+                 began. Its source is unknown, so it is excluded from the self-sufficiency \
+                 percentage.",
                 totals.initial_origin_battery_to_load_kwh
             ),
         ));

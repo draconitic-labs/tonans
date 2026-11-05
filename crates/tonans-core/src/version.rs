@@ -10,7 +10,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// economics can alter a numeric result for an unchanged input. UI-only or
 /// documentation-only releases leave it untouched, which lets a reader of an old
 /// report know whether today's build would still reproduce it.
-pub const MODEL_VERSION: &str = "1.1.1";
+pub const MODEL_VERSION: &str = "1.2.0";
 
 /// Version of the on-disk project schema. See [`crate::schema`].
 pub const SCHEMA_VERSION: u32 = 1;
@@ -24,7 +24,11 @@ pub const VENDOR_NAME: &str = "Flintglade";
 /// Support contact printed in reports and in the application.
 pub const SUPPORT_EMAIL: &str = "support@flintglade.com";
 
-/// The disclaimer that must appear on every screen and in every exported artifact.
+/// Where the source lives. Shown as a link the user can choose to open; Tonans itself
+/// never contacts it.
+pub const SOURCE_URL: &str = "https://github.com/flintglade-tools/tonans";
+
+/// The disclaimer shown under Help and in every exported artifact.
 ///
 /// [`crate::report`] and [`crate::provenance`] both embed this verbatim, and the
 /// report tests assert its presence, so it cannot be dropped by accident.
@@ -40,7 +44,7 @@ pub const MODEL_EXCLUSIONS: &[&str] = &[
     "AC power flow, voltage, reactive power, and short-circuit duty are not modelled.",
     "Protection coordination, conductor sizing, and interconnection compliance are not modelled.",
     "Real-time dispatch, device control, and SCADA integration are out of scope by design.",
-    "Battery degradation is a transparent linear fade and throughput approximation, not an electrochemical lifetime model.",
+    "Battery degradation is a transparent compounding fade and throughput approximation, not an electrochemical lifetime model.",
     "Dispatch policies are fixed, named rules evaluated interval by interval. Tonans does not optimise and does not claim an optimal result.",
     "A single electrical bus is assumed. Losses inside the site distribution system are not modelled.",
 ];

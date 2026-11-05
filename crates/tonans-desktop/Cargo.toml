@@ -1,0 +1,38 @@
+[package]
+name = "tonans-desktop"
+description = "Tonans in a native window: the loopback server running in-process, shown in a Tauri webview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tonans-desktop"
+path = "src/main.rs"
+
+[dependencies]
+tonans-core = { path = "../tonans-core" }
+tonans-app = { path = "../tonans-app" }
+serde.workspace = true
+serde_json.workspace = true
+
+# `custom-protocol` tells Tauri this is a production build. The Tauri CLI normally sets
+# it; setting it here means a plain `cargo build --release` produces the real thing, so
+# neither the install script nor CI needs Node.
+tauri = { version = "2", features = ["custom-protocol"] }
+# Both plugins are called from Rust only. No capability grants the page either plugin's
+# commands, so a page can never name a path or a URL. See `src/main.rs`.
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+# Already in the tree through GTK. Used for one call: naming the program after the app id.
+[target.'cfg(target_os = "linux")'.dependencies]
+glib = "0.18"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

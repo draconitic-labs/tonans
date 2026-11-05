@@ -42,7 +42,8 @@ pub const MAX_SCENARIOS: usize = 32;
 ///
 /// Every interval of every scenario is kept in memory and canonicalized for hashing, at
 /// roughly 6 kB per row. This fits 32 scenarios of hourly data, or 4 scenarios of a
-/// five-minute year, in about 2.5 GB.
+/// five-minute year, in about 2.6 GB. Running out of memory stops the application, because an
+/// allocation failure cannot be caught, so `README.md` says what the largest project needs.
 pub const MAX_RUN_ROWS: usize = 420_480;
 
 /// Largest number of axes in one sensitivity study.

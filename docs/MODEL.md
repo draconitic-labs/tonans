@@ -11,7 +11,7 @@ planning result can be reviewed rather than accepted as a black box.
 - **Not protection, conductor, interconnection, or compliance analysis.**
 - **Not real-time dispatch or control.** Tonans accepts and emits no equipment
   commands.
-- **Not an electrochemical lifetime model.** Degradation is a transparent linear
+- **Not an electrochemical lifetime model.** Degradation is a transparent compounding
   fade and throughput-cost approximation.
 - **Not an optimizer.** Named dispatch rules use no future load, generation, or
   price information. Tonans does not claim an optimum it did not compute.
@@ -112,6 +112,23 @@ after storage**. Grid-origin battery energy and unknown initial battery energy a
 excluded. Sensitivity cells are complete reruns and use this same definition; a
 metric does not change meaning merely because an input is being swept.
 
+A sensitivity cell varies only the axes shown. Import price and demand price apply to the
+varied scenario and to the baseline in every cell, because a site pays the same prices
+whichever it picks: each cell's net present value equals what you get by setting both
+scenarios to that price and running them. A baseline with no demand charge takes the varied
+scenario's periods at that price. Size, cost, reserve, fade, and discount-rate axes describe
+the varied scenario, and the baseline stays as it is.
+
+Battery energy and battery power do not move installed cost by themselves, so a study of
+battery size either moves it at a stated price per kWh of nameplate, or keeps one installed
+cost in every cell and says in its warning ledger that net present value and payback then
+favour larger batteries. Battery power and replacement cost do not move with that price,
+and the ledger says so when either applies. Each cell's installed cost is in the exported
+sensitivity CSV and the report.
+
+The interface marks the best of the cells tested. That is the best of what was tried, not an
+optimum, because Tonans does not search.
+
 ## Energy identities
 
 Each interval checks the AC-bus identity:
@@ -147,6 +164,10 @@ totals are rounded once at the output boundary using decimal half-away-from-zero
 the cent. Machine-readable interval values retain sufficient decimal precision for
 their sum to reconcile with the unrounded accumulator before the final cent rounding.
 
+The report is written to be read, so it then shortens large amounts: 10,000 USD and over prints
+as `-228.4k USD`, and 1,000,000 USD and over as `1.23M USD`. Its tables can be followed but not
+added up to the cent. `summary.json`, `scenarios.csv`, and the timeseries CSVs hold the full figures.
+
 Tariff support includes:
 
 - flat or per-interval import energy rates;
@@ -155,11 +176,31 @@ Tariff support includes:
 - local-calendar-month demand charges by labeled demand period; and
 - fixed monthly charges.
 
+Demand and fixed charges are billed once for every calendar month the data touches at the site's
+time zone, in full, however little of that month the data covers. A year of data that starts mid
+month, is stamped at the end of each hour, or is stamped in UTC for a site elsewhere, touches 13.
+Those 13 full charges stay in
+the grid cost, savings, and net present value, because scaling them would be a guess about a bill
+Tonans has not seen. In one test year of 8,760 hours, starting on the first of the month gave 71,600
+USD of annual grid cost, starting on July 15 gave 72,700 USD, and five hours of December cost a full
+month's charges for a year stamped in UTC at a New York site. So any count other than 12 raises the
+caution `cost.billed_months_not_twelve`, which states the count. It appears in Results, in the report's
+warning ledger, and in `provenance.json` and `summary.json`.
+
+A warning is prose, so it changes no number and neither `model_input_hash` nor `results_hash`. A
+study's own identity hash does cover its warnings, so a study over data touching other than 12 months
+has a different identity from a build without this warning. A year touching exactly 12 raises nothing
+and moves nothing.
+
 ## Economics
 
 Tonans reports CAPEX, annual OPEX, replacement assumptions, simple and discounted
-payback, and a simple NPV against the no-storage baseline. It includes no tax,
-incentive, depreciation, or residual value.
+payback, and a simple NPV against the project's chosen baseline, which is usually no storage
+and may itself have a battery. It includes no tax, incentive, depreciation, or residual value.
+
+A scenario with no capital cost has no payback, because it has nothing to repay. The screens and
+the report say so, and CSV and JSON leave the field empty, as they do for capital that is not repaid
+within the horizon. The installed cost beside it tells the two apart.
 
 If a data set is shorter than a year, period results are multiplied by the stated
 annualization factor. A warning explains that demand charges and seasonal behavior
@@ -171,6 +212,17 @@ savings do not escalate. Annual OPEX and throughput wear cost are held constant 
 nominal terms; replacement follows the explicit replacement assumption. If the user
 selects capacity-proportional benefit scaling, the documented fade factor is applied
 to modeled benefits, but Tonans does not rerun dispatch for every future year.
+
+Fade compounds. Each year's loss is taken from what the year before left:
+
+```text
+r = calendar_fade_pct_per_year + cycle_fade_pct_per_cycle x equivalent_full_cycles_per_year
+usable capacity in year n = initial_capacity_pct x (1 - r / 100) ^ (n - 1)
+```
+
+So in the bundled demo's peak-limit scenario, year 15 has 73.25% of nameplate, where a straight
+line at the same `r` would leave 69.21%. A replacement resets usable capacity to 100%, and the
+compounding starts again from there.
 
 ## Determinism and hashes
 

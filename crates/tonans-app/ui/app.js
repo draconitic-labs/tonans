@@ -20,26 +20,85 @@
  *     report cannot drift away from the UI.
  */
 
+import {
+  TARIFF_PRESETS,
+  annualNote,
+  chooseStudyAxis,
+  chooseStudyScenario,
+  encodeFileNameHeader,
+  fileTooLarge,
+  formatAxis,
+  hasPriceAxis,
+  noPaybackText,
+  parseValues,
+  readOptionalNumber,
+  resultsStatus,
+  sendTagged,
+  studySettings,
+} from '/logic.mjs';
+
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
 
 const state = {
   token: null,
+  desktop: false,
   session: null,
   projects: [],
   project: null,
+  /** The digest of the project file this window last read or wrote. */
+  revision: null,
+  /** True once this window has seen a different revision on disk. */
+  changedElsewhere: false,
+  /** True once the project's file has gone: what is on screen is then the only copy. */
+  projectMissing: false,
+  /** Why the last Reopen failed. It stays on screen until that is dealt with. */
+  reopenError: null,
+  /** Bumped by each open, so the slower of two opens cannot replace the newer. */
+  openTicket: 0,
+  saving: null,
+  profile: null,
+  savedJson: '',
+  reportedUnsaved: false,
+  undo: [],
+  redo: [],
+  editKey: null,
+  selected: null,
+  openSections: new Set(['battery', 'dispatch']),
+  diffOpen: false,
   run: null,
+  runStamp: null,
+  resultsHash: null,
   timelines: {},
+  detail: null,
   study: null,
   studyRequest: null,
+  studyMetric: 'npv',
+  sens: null,
   bundle: null,
   view: 'data',
   upload: null,
+  mapping: null,
+  importSettings: null,
+  mappingNotes: [],
+  mappingReviewed: false,
+  importError: null,
+  justImported: null,
+  /** The request in flight, as `{ what, project, revision }`, or null. */
+  busy: null,
 };
 
-/** Take the launch token out of the URL and keep it in memory only. */
+/** Take the launch token and keep it in memory only. */
 function claimToken() {
+  // The desktop shell hands the token over directly, so it never appears in a URL.
+  const boot = window.__TONANS_BOOT__;
+  if (boot) {
+    state.token = boot.token;
+    state.desktop = Boolean(boot.desktop);
+    delete window.__TONANS_BOOT__;
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
   if (token) {
@@ -50,20 +109,31 @@ function claimToken() {
   }
 }
 
-async function api(path, { method = 'GET', body, raw, filename } = {}) {
+/** Send a request. Resolves with the parsed body and the project revision it was about. */
+async function request(path, { method = 'GET', body, raw, filename, revision } = {}) {
   const headers = { Authorization: `Bearer ${state.token}` };
   let payload;
   if (raw) {
     headers['Content-Type'] = 'text/csv';
-    headers['X-Tonans-Filename'] = filename || 'upload.csv';
+    headers['X-Tonans-Filename'] = encodeFileNameHeader(filename || 'upload.csv');
     payload = raw;
   } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
+  if (revision) headers['X-Tonans-Revision'] = revision;
 
-  const response = await fetch(path, { method, headers, body: payload });
-  const text = await response.text();
+  let response;
+  let text;
+  try {
+    response = await fetch(path, { method, headers, body: payload });
+    text = await response.text();
+  } catch {
+    // All a page gets from a dropped connection is a TypeError saying "Load failed".
+    const error = new Error('No reply from the local server. Check the result before trying again, or restart.');
+    error.code = 'ui.no_answer';
+    throw error;
+  }
   let parsed = null;
   try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
 
@@ -72,7 +142,62 @@ async function api(path, { method = 'GET', body, raw, filename } = {}) {
     error.code = parsed?.code || `http.${response.status}`;
     throw error;
   }
-  return parsed;
+  return { body: parsed, revision: response.headers.get('x-tonans-revision') };
+}
+
+async function api(path, options) {
+  return (await request(path, options)).body;
+}
+
+/** What this window believes it is showing, to tag a request with and to check its answer. */
+const currentStamp = () => ({ project: state.project?.name ?? null, revision: state.revision });
+
+function markBusy(what, stamp) {
+  state.busy = { what, project: stamp.project, revision: stamp.revision };
+  return state.busy;
+}
+
+/** Only the request that set the mark can clear it: a save or an open may have moved on. */
+function releaseBusy(mark) {
+  if (state.busy === mark) state.busy = null;
+}
+
+const BUSY_LABEL = { run: 'Running…', study: 'Running…', export: 'Writing…', import: 'Importing…' };
+const BUSY_NAME = { run: 'a run', study: 'a study', export: 'an export', import: 'an import' };
+
+/** What is running, whichever project is on screen now. The server does one at a time. */
+function busyText() {
+  return `Still running ${BUSY_NAME[state.busy.what]} of "${state.busy.project}".`;
+}
+
+/** The note beside a button that is waiting on a job for another project. */
+function busyNote() {
+  if (!state.busy || state.busy.project === state.project?.name) return null;
+  return el('p', { class: 'tiny muted', text: busyText() });
+}
+
+/** A job has finished: bring back every button that was waiting for it. */
+function redrawAfterJob() {
+  if (!state.project) return;
+  const redraw = { results: renderResults, sensitivity: renderSensitivity, export: renderExport }[state.view];
+  if (redraw) redraw();
+  syncImportButton();
+  renderBus();
+}
+
+/** Say that an answer arrived too late to show. */
+function dropLate(what, stamp) {
+  toast(stamp.project === state.project?.name
+    ? `The ${what} finished after the project changed, so it is not shown. Run it again for the current assumptions.`
+    : `The ${what} of "${stamp.project}" finished after you left it, so it is not shown.`, 'ui.late_result');
+}
+
+const projectPath = (suffix = '') =>
+  `/api/projects/${encodeURIComponent(state.project.name)}${suffix}`;
+
+/** Ask the desktop shell for something only it can do. Rejects with `{ code, message }`. */
+function shell(command, args) {
+  return window.__TAURI__.core.invoke(command, args);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,52 +241,249 @@ const COLOUR = {
   loss: '--c-loss',
   unmet: '--c-unmet',
   soc: '--c-load',
+  baseline: '--ink-muted',
 };
 const paint = (role) => css(COLOUR[role] || '--ink');
+
+/** The ink for text set inside a filled mark: white or near-black, by the fill's luminance. */
+function inkOn(fill) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(fill);
+  if (!match) return css('--ink');
+  const [r, g, b] = match.slice(1).map((part) => {
+    const c = parseInt(part, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return css(luminance > 0.3 ? '--on-fill-dark' : '--on-fill-light');
+}
 
 // ---------------------------------------------------------------------------
 // Formatting. Every displayed quantity carries its unit.
 // ---------------------------------------------------------------------------
 
+const grouped = (value, digits = 0) => value.toLocaleString(undefined, {
+  minimumFractionDigits: digits, maximumFractionDigits: digits,
+});
+
+function siteFormat(options) {
+  const timeZone = state.project?.site?.timezone;
+  try {
+    return new Intl.DateTimeFormat(undefined, { ...options, timeZone });
+  } catch {
+    return new Intl.DateTimeFormat(undefined, options);
+  }
+}
+
 const fmt = {
   n(value, digits = 1) {
     if (value === null || value === undefined || Number.isNaN(value)) return '—';
-    const abs = Math.abs(value);
-    if (abs >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
-    if (abs >= 1e4) return `${(value / 1e3).toFixed(1)}k`;
-    if (abs < 1e-9) return '0';
-    return value.toFixed(digits);
+    if (Math.abs(value) < 1e-9) return '0';
+    return grouped(value, digits);
   },
-  kwh: (v) => `${fmt.n(v, 0)} kWh`,
+  kwh: (v) => `${fmt.n(v, Math.abs(v) < 100 ? 1 : 0)} kWh`,
   kw: (v) => `${fmt.n(v, 1)} kW`,
   pct: (v) => `${fmt.n(v, 1)} %`,
   usd(v) {
     if (v === null || v === undefined) return '—';
-    const abs = Math.abs(v);
-    const body = abs >= 1e4 ? `${(v / 1e3).toFixed(1)}k` : v.toFixed(2);
-    return `${body} USD`;
+    return `${grouped(v, Math.abs(v) < 1000 ? 2 : 0)} USD`;
   },
-  years: (v) => (v === null || v === undefined ? 'never' : `${v.toFixed(1)} years`),
-  when: (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+  years: (v) => `${v.toFixed(1)} years`,
+  /** A time in the site's own timezone: the clock on the site's meter, not this PC's. */
+  when: (iso) => siteFormat({ dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso)),
+  day: (iso) => siteFormat({ month: 'short', day: 'numeric' }).format(new Date(iso)),
+  dayHour: (iso) => siteFormat({ month: 'short', day: 'numeric', hour: 'numeric' }).format(new Date(iso)),
+  signed(value, format) {
+    if (Math.abs(value) < 1e-9) return 'same as baseline';
+    return `${value > 0 ? '+' : ''}${format(value)} vs baseline`;
+  },
 };
 
-function toast(message, code, ok = false) {
+function toast(message, code, ok = false, action = null) {
   const node = document.getElementById('toast');
   clear(node);
-  if (code) node.appendChild(el('span', { class: 't-code', text: code }));
-  node.appendChild(document.createTextNode(message));
+  const text = el('span');
+  if (code) text.appendChild(el('span', { class: 't-code', text: code }));
+  text.appendChild(document.createTextNode(message));
+  node.appendChild(text);
+  if (action) {
+    node.appendChild(el('button', { type: 'button', text: action.label, onclick: () => {
+      node.classList.add('hidden');
+      action.run();
+    } }));
+  }
   node.className = ok ? 'toast ok' : 'toast';
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => node.classList.add('hidden'), ok ? 3200 : 9000);
+  toast.timer = setTimeout(() => node.classList.add('hidden'), ok ? 5000 : 12000);
+}
+
+/** Tell the user about a failure, in the one way each kind needs. */
+function reportFailure(error) {
+  if (error.code === 'conflict.project_changed') {
+    state.changedElsewhere = true;
+    redrawForChange();
+    offerReopen();
+    return;
+  }
+  if (error.code === 'conflict.project_missing') {
+    state.projectMissing = true;
+    syncUnsaved();
+    redrawForChange();
+    offerSaveAgain();
+    return;
+  }
+  toast(error.message, error.code);
+  // A run or a study can be the first to find the file gone.
+  if (error.code === 'schema.project_not_found') checkForOutsideChange();
 }
 
 async function guard(work) {
   try {
     return await work();
   } catch (error) {
-    toast(error.message, error.code);
+    reportFailure(error);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Dialogs
+// ---------------------------------------------------------------------------
+
+/** Show the one modal dialog. Resolves with what `close` is called with, or null on Esc. */
+function openDialog(build) {
+  const dialog = document.getElementById('dialog');
+  clear(dialog);
+  return new Promise((resolve) => {
+    const close = (value) => {
+      dialog.returnValue = '';
+      dialog.close();
+      resolve(value);
+    };
+    dialog.oncancel = (event) => { event.preventDefault(); close(null); };
+    build(dialog, close);
+    dialog.showModal();
+  });
+}
+
+/** Ask what to do about unsaved edits. Resolves true if it is safe to carry on. */
+async function settleUnsaved(what) {
+  if (!isUnsaved()) return true;
+  const choice = await openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: state.projectMissing
+      ? 'This project\'s file has gone from the workspace'
+      : 'This project has unsaved changes' }));
+    dialog.appendChild(el('p', { text: state.projectMissing
+      ? `What is on this screen is the only copy. Save it before you ${what}?`
+      : `Save them before you ${what}?` }));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Keep working', onclick: () => close('cancel') }),
+      el('button', { type: 'button', text: 'Discard changes', class: 'danger', onclick: () => close('discard') }),
+      el('button', { type: 'button', text: 'Save', class: 'primary', onclick: () => close('save') }),
+    ]));
+  });
+  // A save that fails says why, and leaves the user where they were.
+  if (choice === 'save') return ensureSaved();
+  if (choice === 'discard') {
+    restoreEditable(state.savedJson);
+    syncUnsaved();
+    // The inputs on screen are bound to the objects just replaced, and the next step can fail.
+    show(state.view, { keepScroll: true });
+    return true;
+  }
+  return false;
+}
+
+/** The project's file has gone. Saving writes it back, and the user says when. */
+async function offerSaveAgain() {
+  if (document.getElementById('dialog').open) {
+    toast('This project\'s file has gone from the workspace. Nothing was saved.', 'conflict.project_missing');
+    return;
+  }
+  const choice = await openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: 'This project\'s file has gone from the workspace' }));
+    dialog.appendChild(el('p', { text:
+      'It was moved or deleted outside Tonans, and nothing was saved just now. What is on this screen is the only copy. ' +
+      'Saving again writes it back to the workspace, under the same name.' }));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+      el('button', { type: 'button', text: 'Save it again', class: 'primary', onclick: () => close('save') }),
+    ]));
+  });
+  if (choice === 'save') await guard(saveProject);
+}
+
+/**
+ * Another window got there first. Nothing has been overwritten on either side, and the
+ * safe answer is the one Enter gives: stay, with the edits still on screen to copy.
+ */
+async function offerReopen() {
+  if (document.getElementById('dialog').open) {
+    toast('This project was changed somewhere else. Nothing was saved.', 'conflict.project_changed');
+    return;
+  }
+  const unsaved = isUnsaved();
+  const choice = await openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: 'This project was changed somewhere else' }));
+    dialog.appendChild(el('p', { text:
+      'Probably in another Tonans window. Nothing was saved or run from here.' }));
+    dialog.appendChild(el('p', { text: unsaved
+      ? 'Reopening loads the latest version and drops the unsaved changes on this screen. Keep working if you want to copy them first.'
+      : 'Reopening loads the latest version.' }));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+      el('button', { type: 'button', text: 'Reopen the project', class: 'primary', onclick: () => close('reopen') }),
+    ]));
+  });
+  // The edits go only when the latest version has arrived to replace them. If it cannot be
+  // read, nothing has moved: they are still in the project, still unsaved, and the inputs on
+  // screen are still bound to them.
+  if (choice === 'reopen') await openProject(state.project.name, { replacingEdits: true });
+}
+
+/** Has anyone else written this project? Asked on focus and on each change of screen. */
+async function checkForOutsideChange() {
+  const stamp = currentStamp();
+  if (!stamp.project) return;
+  let found = null;
+  try {
+    found = await api(`/api/projects/${encodeURIComponent(stamp.project)}/revision`);
+  } catch (error) {
+    if (error.code !== 'schema.project_not_found') return;
+  }
+  if (state.project?.name !== stamp.project || state.revision !== stamp.revision) return;
+  const missing = !found;
+  const changed = Boolean(found) && found.revision !== stamp.revision;
+  // The file is back as this window read it, so whatever Reopen could not read is over.
+  const reopenError = !missing && !changed ? null : state.reopenError;
+  if (changed === state.changedElsewhere && missing === state.projectMissing && reopenError === state.reopenError) return;
+  state.changedElsewhere = changed;
+  state.projectMissing = missing;
+  state.reopenError = reopenError;
+  syncUnsaved();
+  redrawForChange();
+}
+
+/** Bring back into line every screen that says how current its contents are. */
+function redrawForChange() {
+  if (!state.project) return;
+  renderBus();
+  const redraw = { results: renderResults, sensitivity: renderSensitivity, export: renderExport }[state.view];
+  if (redraw) redraw();
+}
+
+/** A sentence about how far to trust what a screen shows, or nothing if it is all current. */
+function staleNotice(unsavedText) {
+  if (state.projectMissing) {
+    return el('div', { class: 'banner', text:
+      'This project\'s file has gone from the workspace, moved or deleted outside Tonans. What is shown here is the only ' +
+      'copy. Saving writes it back.' });
+  }
+  if (state.changedElsewhere) {
+    return el('div', { class: 'banner', text:
+      'This project was changed somewhere else after this window read it. What is shown here is from the version ' +
+      'this window opened, and saving from here would be refused. Reopen the project to see the latest.' });
+  }
+  return isUnsaved() ? el('div', { class: 'banner', text: unsavedText }) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +493,7 @@ async function guard(work) {
 async function boot() {
   claimToken();
   if (!state.token) {
-    toast('No launch token. Open the link Tonans printed when it started.', 'server.unauthorized');
+    toast('No launch token. Open the link printed at startup.', 'server.unauthorized');
     return;
   }
 
@@ -180,32 +502,48 @@ async function boot() {
   state.session = session;
 
   document.getElementById('version-badge').textContent =
-    `v${session.app_version} · model ${session.model_version} · schema v${session.schema_version}`;
-  document.getElementById('workspace-path').textContent = session.workspace;
+    `Version ${session.app_version}, model ${session.model_version}, schema v${session.schema_version}`;
+  const path = document.getElementById('workspace-path');
+  path.textContent = `Workspace: ${session.workspace}`;
+  path.title = session.workspace;
 
-  document.getElementById('quit').addEventListener('click', async () => {
-    await guard(() => api('/api/shutdown', { method: 'POST' }));
-    document.body.textContent = 'Tonans has stopped. You can close this tab.';
-  });
-
-  document.getElementById('new-project').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const name = document.getElementById('new-name').value.trim();
-    const timezone = document.getElementById('new-timezone').value.trim();
-    const project = await guard(() => api('/api/projects', { method: 'POST', body: { name, timezone } }));
-    if (!project) return;
-    document.getElementById('new-name').value = '';
-    await refreshProjects();
-    await openProject(project.name);
-    toast(`Created "${project.name}".`, null, true);
-  });
-
-  for (const tab of document.querySelectorAll('.tab')) {
-    tab.addEventListener('click', () => show(tab.dataset.view));
+  const quit = document.getElementById('quit');
+  if (state.desktop) {
+    quit.textContent = 'Quit';
+    // A reload starts from what is saved, so the shell has nothing left to ask about.
+    shell('set_unsaved', { unsaved: false }).catch(() => {});
+    // The webview's own menu offers Back and Reload, which mean nothing in an application
+    // and would drop unsaved edits. Text fields and selected text keep theirs: copy, paste.
+    document.addEventListener('contextmenu', (event) => {
+      const target = event.target;
+      const editable = target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      if (!editable && !window.getSelection()?.toString()) event.preventDefault();
+    });
   }
+  quit.addEventListener('click', quitApp);
+  document.getElementById('save').addEventListener('click', () => guard(saveProject));
+  document.getElementById('undo').addEventListener('click', undo);
+  document.getElementById('redo').addEventListener('click', redo);
+  document.getElementById('help').addEventListener('click', showHelp);
+  document.getElementById('new-project').addEventListener('click', newProject);
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('focusout', () => { state.editKey = null; });
+  window.addEventListener('focus', checkForOutsideChange);
 
   await refreshProjects();
   if (state.projects.length) await openProject(state.projects[0].name);
+}
+
+async function quitApp() {
+  if (state.desktop) {
+    // The shell's close handler asks about unsaved changes itself, so the button and
+    // the window's own close box behave the same way.
+    await guard(() => shell('quit'));
+    return;
+  }
+  if (!(await settleUnsaved('stop the server'))) return;
+  await guard(() => api('/api/shutdown', { method: 'POST' }));
+  document.body.textContent = 'Server stopped.';
 }
 
 async function refreshProjects() {
@@ -224,77 +562,536 @@ async function refreshProjects() {
       el('span', { class: 'p-name', text: entry.name }),
       el('span', {
         class: 'p-meta',
-        text: `${entry.scenario_count} scenario(s) · ${entry.has_dataset ? 'data imported' : 'no data yet'}`,
+        text: `${entry.scenario_count} scenario${entry.scenario_count === 1 ? '' : 's'}, ` +
+              `${entry.has_dataset ? 'data imported' : 'no data yet'}`,
       }),
     ]);
     list.appendChild(el('li', {}, button));
   }
 }
 
-async function openProject(name) {
-  const project = await guard(() => api(`/api/projects/${encodeURIComponent(name)}`));
-  if (!project) return;
+async function newProject() {
+  // Before the dialog, so a project is never created while a question hangs over this one.
+  if (!(await settleUnsaved('create a new project'))) return;
+  const created = await openDialog((dialog, close) => {
+    const name = el('input', { type: 'text', maxlength: '64', placeholder: 'Warehouse 3', autocomplete: 'off' });
+    const timezone = timezoneInput(state.project?.site?.timezone || 'America/New_York');
+    const failure = el('div', { class: 'banner critical hidden' });
+    const create = async () => {
+      failure.classList.add('hidden');
+      try {
+        const project = await api('/api/projects', {
+          method: 'POST',
+          body: { name: name.value.trim(), timezone: timezone.value.trim() },
+        });
+        close(project.name);
+      } catch (error) {
+        failure.textContent = error.message;
+        failure.classList.remove('hidden');
+      }
+    };
+    dialog.appendChild(el('h3', { text: 'New project' }));
+    dialog.appendChild(el('div', { class: 'stack' }, [
+      field('Name', name),
+      field('Site timezone (IANA name)', timezone),
+      failure,
+    ]));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Cancel', onclick: () => close(null) }),
+      el('button', { type: 'button', text: 'Create project', class: 'primary', onclick: create }),
+    ]));
+    for (const input of [name, timezone]) input.addEventListener('keydown', (event) => { if (event.key === 'Enter') create(); });
+    setTimeout(() => name.focus(), 0);
+  });
+  if (!created) return;
+  await refreshProjects();
+  await openProject(created);
+  toast(`Created "${created}".`, null, true);
+}
+
+/** A free-text timezone box, with the IANA names offered where the webview knows them. */
+function timezoneInput(value) {
+  const input = el('input', { type: 'text', maxlength: '64', value, autocomplete: 'off', list: 'tz-names' });
+  if (!document.getElementById('tz-names') && Intl.supportedValuesOf) {
+    const list = el('datalist', { id: 'tz-names' });
+    for (const name of Intl.supportedValuesOf('timeZone')) list.appendChild(el('option', { value: name }));
+    document.body.appendChild(list);
+  }
+  return input;
+}
+
+async function openProject(name, { replacingEdits = false } = {}) {
+  if (!replacingEdits && !(await settleUnsaved(`open ${name}`))) return;
+  const ticket = ++state.openTicket;
+  let reply;
+  try {
+    reply = await request(`/api/projects/${encodeURIComponent(name)}`);
+  } catch (error) {
+    if (replacingEdits) {
+      state.reopenError = { code: error.code, message: error.message };
+      syncUnsaved();
+      redrawForChange();
+    }
+    reportFailure(error);
+    return;
+  }
+  if (ticket !== state.openTicket) return;
+  const project = reply.body;
+  forgetStagedUpload();
   state.project = project;
-  state.run = null;
-  state.study = null;
-  state.studyRequest = null;
-  state.bundle = null;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
+  state.profile = null;
+  dropDerivedResults();
+  state.timelines = {};
+  state.sens = null;
   state.upload = null;
+  state.mapping = null;
+  state.importError = null;
+  state.justImported = null;
+  state.undo = [];
+  state.redo = [];
+  state.editKey = null;
+  state.selected = project.scenarios[0]?.id ?? null;
+  state.detail = null;
+  markSaved();
+
+  if (project.dataset) {
+    const profile = await guard(() => api(projectPath('/profile')));
+    if (ticket !== state.openTicket) return;
+    state.profile = profile;
+  }
 
   document.getElementById('empty-state').classList.add('hidden');
-  document.getElementById('project-header').classList.remove('hidden');
-  document.getElementById('tabs').classList.remove('hidden');
+  document.getElementById('bus').classList.remove('hidden');
+  document.getElementById('next').classList.remove('hidden');
   document.getElementById('project-name').textContent = project.name;
 
   renderProjectSummary(project);
-
   await refreshProjects();
   show(project.dataset ? 'scenarios' : 'data');
 }
 
-function renderProjectSummary(project) {
-  const dataset = project.dataset;
-  document.getElementById('project-summary').textContent = dataset
-    ? `${dataset.interval_count.toLocaleString()} intervals of ${dataset.interval_minutes}-minute data · ` +
-      `${project.site.timezone} · ${project.scenarios.length} scenario(s) · imported from ${dataset.source.filename}`
-    : `${project.site.timezone} · no data imported yet`;
+function isSyntheticProject(project) {
+  return project.name === state.session.demo_project ||
+    Boolean(project.dataset?.import_warnings?.some((w) => w.code === 'data.synthetic_sample'));
 }
 
-function show(view) {
-  state.view = view;
-  for (const tab of document.querySelectorAll('.tab')) {
-    tab.setAttribute('aria-selected', tab.dataset.view === view ? 'true' : 'false');
+function renderProjectSummary(project) {
+  const node = document.getElementById('project-summary');
+  clear(node);
+  const dataset = project.dataset;
+  // The most damaging thing this application could do is present invented data as a
+  // real building's, so synthetic data says so at the top of every screen.
+  if (dataset && isSyntheticProject(project)) {
+    node.appendChild(el('span', { class: 'synthetic', text: 'Synthetic data, not a real site. ' }));
   }
-  for (const name of ['data', 'scenarios', 'results', 'sensitivity', 'export']) {
+  node.appendChild(document.createTextNode(dataset
+    ? `${dataset.interval_count.toLocaleString()} intervals of ${dataset.interval_minutes}-minute data, ` +
+      `${project.site.timezone}, from ${dataset.source.filename}`
+    : `${project.site.timezone}, no data imported yet`));
+}
+
+const VIEWS = ['data', 'scenarios', 'results', 'sensitivity', 'export'];
+
+function show(view, { keepScroll = false } = {}) {
+  state.view = view;
+  for (const name of VIEWS) {
     document.getElementById(`view-${name}`).classList.toggle('hidden', name !== view);
   }
   const render = { data: renderData, scenarios: renderScenarios, results: renderResults,
                    sensitivity: renderSensitivity, export: renderExport }[view];
   if (render) render();
+  renderBus();
+  if (!keepScroll) document.getElementById('views').scrollTop = 0;
+  checkForOutsideChange();
 }
 
-async function saveProject() {
-  const saved = await guard(() => api(`/api/projects/${encodeURIComponent(state.project.name)}`, {
-    method: 'PUT',
-    body: state.project,
-  }));
-  if (saved) {
-    state.project = saved;
-    // Results were produced from the old assumptions and are now stale. Throwing
-    // them away is the only honest thing to do: a chart next to assumptions it was
-    // not produced from is worse than no chart.
-    state.run = null;
-    state.study = null;
-    state.studyRequest = null;
-    state.bundle = null;
-    renderProjectSummary(saved);
-    // The inputs on screen are bound to the object just replaced. Redraw them, or the
-    // next edit changes that old object and the next save silently drops it.
-    show(state.view);
-    toast('Saved. Re-run to refresh results.', null, true);
-    await refreshProjects();
+// ---------------------------------------------------------------------------
+// The bus: where you are, what is done, and what comes next
+// ---------------------------------------------------------------------------
+
+function stepStates() {
+  const project = state.project;
+  const dataset = project.dataset;
+  const count = project.scenarios.length;
+  const unsaved = isUnsaved();
+  const old = state.changedElsewhere ? ', out of date' : (unsaved ? ', from the last save' : '');
+  return [
+    { view: 'data', name: '1 Data', done: Boolean(dataset),
+      note: dataset ? `${dataset.interval_count.toLocaleString()} intervals` : 'Nothing imported' },
+    { view: 'scenarios', name: '2 Scenarios', done: count > 1 && !unsaved,
+      note: `${count} scenario${count === 1 ? '' : 's'}${unsaved ? ', unsaved' : ''}` },
+    { view: 'results', name: '3 Results', done: Boolean(state.run),
+      note: resultsStatus(state.runStamp, currentStamp(), { unsaved, changedElsewhere: state.changedElsewhere }) },
+    { view: 'sensitivity', name: '4 Sensitivity', done: Boolean(state.study),
+      note: state.study ? `${state.study.cells.length} cells${old}` : 'Optional' },
+    { view: 'export', name: '5 Export', done: Boolean(state.bundle),
+      note: state.bundle ? `${state.bundle.artifacts.length} files written${old}` : 'Nothing written' },
+  ];
+}
+
+function renderBus() {
+  if (!state.project) return;
+  const bus = document.getElementById('bus');
+  clear(bus);
+  const steps = stepStates();
+  steps.forEach((step, index) => {
+    // A segment is live once the step feeding it is done. Sensitivity is optional, so
+    // results alone carry the conductor through to export.
+    const live = step.done || (step.view === 'sensitivity' && steps[2].done);
+    bus.appendChild(el('button', {
+      type: 'button',
+      role: 'tab',
+      class: `step${step.done ? ' done' : ''}${live && index < steps.length - 1 ? ' live' : ''}`,
+      'aria-selected': state.view === step.view ? 'true' : 'false',
+      title: `Ctrl+${index + 1}`,
+      onclick: () => show(step.view),
+    }, [
+      el('span', { class: 'step-name', text: step.name }),
+      el('span', { class: 'step-note', text: step.note }),
+    ]));
+  });
+  renderNext();
+}
+
+/** Why a file on disk can never be opened, as against one that might open if tried again. */
+const UNOPENABLE_FILE = ['schema.unreadable', 'schema.invalid', 'schema.version_unsupported', 'schema.project_name_mismatch', 'limit.project_bytes'];
+
+/** The next useful thing, with the button that does it. Nothing, when there is nothing to do. */
+function nextStep() {
+  const project = state.project;
+  if (state.projectMissing) {
+    return { text: 'This project\'s file has gone from the workspace. What is on this screen is the only copy.',
+             label: 'Save it again', run: () => guard(saveProject) };
   }
-  return saved;
+  if (state.reopenError) {
+    return { text: `Could not reopen this project: ${state.reopenError.message} Your edits are still here, and they are not saved.` +
+               (UNOPENABLE_FILE.includes(state.reopenError.code) ? ' Move the bad file out of the workspace, then Save writes the edits.' : ''),
+             label: 'Try again', run: offerReopen };
+  }
+  if (state.changedElsewhere) {
+    return { text: 'This project was changed somewhere else, probably in another window.',
+             label: 'Reopen the project', run: offerReopen };
+  }
+  if (state.busy && !isUnsaved()) return { text: busyText() };
+  if (!project.dataset) {
+    return state.upload || state.view === 'data' ? {} : { label: 'Go to data', run: () => show('data') };
+  }
+  if (isUnsaved()) return { text: 'You have unsaved changes.', label: 'Save', run: () => guard(saveProject) };
+  if (project.scenarios.length < 2) return { label: 'Add a scenario', run: addScenario };
+  if (!state.run) return { label: 'Run all scenarios', run: runAll };
+  if (state.view === 'sensitivity' && !state.study && !state.bundle) {
+    return { label: 'Go to export', run: () => show('export') };
+  }
+  if (!state.study && !state.bundle && state.view === 'results') {
+    return { label: 'Open sensitivity', run: () => show('sensitivity') };
+  }
+  if (!state.study && !state.bundle && state.view !== 'export') {
+    return { text: 'Results are current.', label: 'Compare results', run: () => show('results') };
+  }
+  if (!state.bundle) {
+    return state.view === 'export'
+      ? { label: 'Export bundle', run: runExport }
+      : { label: 'Go to export', run: () => show('export') };
+  }
+  return { text: 'Everything is current.' };
+}
+
+function renderNext() {
+  const node = document.getElementById('next');
+  clear(node);
+  const next = nextStep();
+  node.classList.toggle('hidden', !next.text && !next.label);
+  if (next.label) node.appendChild(el('span', { class: 'next-label', text: 'Next' }));
+  if (next.text) node.appendChild(el('span', { class: 'muted', text: next.text }));
+  if (next.label) node.appendChild(el('button', { type: 'button', text: next.label, onclick: next.run }));
+}
+
+// ---------------------------------------------------------------------------
+// Saving, unsaved changes, and undo
+// ---------------------------------------------------------------------------
+
+/** The parts of a project this screen edits, as text. Comparing it is what "unsaved" means. */
+function editableJson() {
+  const { scenarios, baseline_scenario_id: baseline, notes } = state.project;
+  return JSON.stringify({ scenarios, baseline, notes: notes ?? '' });
+}
+
+function restoreEditable(json, selected = state.selected) {
+  const { scenarios, baseline, notes } = JSON.parse(json);
+  state.project.scenarios = scenarios;
+  state.project.baseline_scenario_id = baseline;
+  state.project.notes = notes;
+  state.selected = scenarios.some((s) => s.id === selected) ? selected : (scenarios[0]?.id ?? null);
+}
+
+/** Everything that was worked out from a saved project. All of it goes when that changes. */
+function dropDerivedResults() {
+  state.run = null;
+  state.runStamp = null;
+  state.resultsHash = null;
+  state.study = null;
+  state.studyRequest = null;
+  state.bundle = null;
+}
+
+function isUnsaved() {
+  return Boolean(state.project) && (state.projectMissing || editableJson() !== state.savedJson);
+}
+
+function markSaved() {
+  state.savedJson = editableJson();
+  syncUnsaved();
+}
+
+/** Bring every "unsaved" signal into line, including the one the shell asks before closing. */
+function syncUnsaved() {
+  const unsaved = isUnsaved();
+  document.getElementById('save').disabled = !unsaved;
+  document.getElementById('undo').disabled = state.undo.length === 0;
+  document.getElementById('redo').disabled = state.redo.length === 0;
+  document.getElementById('undo').title = state.undo.length
+    ? `Undo: ${state.undo[state.undo.length - 1].label} (Ctrl+Z)` : 'Nothing to undo';
+  document.getElementById('redo').title = state.redo.length
+    ? `Redo: ${state.redo[state.redo.length - 1].label} (Ctrl+Shift+Z)` : 'Nothing to redo';
+  const label = document.getElementById('save-state');
+  label.textContent = unsaved ? 'Unsaved changes' : (state.project ? 'All changes saved' : '');
+  label.className = `save-state${unsaved ? ' unsaved' : ''}`;
+  if (state.desktop && unsaved !== state.reportedUnsaved) {
+    state.reportedUnsaved = unsaved;
+    shell('set_unsaved', { unsaved }).catch(() => {});
+  }
+  renderBus();
+}
+
+const UNDO_LIMIT = 100;
+
+function checkpoint(label) {
+  state.undo.push({ label, json: editableJson(), selected: state.selected });
+  if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+  state.redo = [];
+}
+
+/** Record one user edit. Repeated edits to one field, while it has focus, are one undo step. */
+function recordEdit(key, label, mutate) {
+  if (state.editKey !== key) {
+    checkpoint(label);
+    state.editKey = key;
+  }
+  mutate();
+  syncUnsaved();
+}
+
+/** A change to the shape of the project: undoable, and it redraws the editor. */
+function change(label, mutate) {
+  state.editKey = null;
+  checkpoint(label);
+  mutate();
+  syncUnsaved();
+  if (state.view === 'scenarios') renderScenarios();
+}
+
+function undo() {
+  const entry = state.undo.pop();
+  if (!entry) return;
+  state.redo.push({ label: entry.label, json: editableJson(), selected: state.selected });
+  restoreEditable(entry.json, entry.selected);
+  state.editKey = null;
+  show(state.view, { keepScroll: true });
+  syncUnsaved();
+  toast(`Undid: ${entry.label}.`, null, true);
+}
+
+function redo() {
+  const entry = state.redo.pop();
+  if (!entry) return;
+  state.undo.push({ label: entry.label, json: editableJson(), selected: state.selected });
+  restoreEditable(entry.json, entry.selected);
+  state.editKey = null;
+  show(state.view, { keepScroll: true });
+  syncUnsaved();
+  toast(`Redid: ${entry.label}.`, null, true);
+}
+
+/** Refuse to save a number field the user left blank or unreadable, rather than save 0. */
+function firstInvalidField() {
+  return document.querySelector('.view:not(.hidden) input[aria-invalid="true"]');
+}
+
+/**
+ * A save the user knows is writing the file back says so, or it would be told again. The file
+ * may have come back since this window last looked, so it looks again: the same bytes then save
+ * normally, and different bytes are refused as a change.
+ */
+async function revisionToSave(stamp) {
+  // A failed Reopen means a bad file, and moving it out of the way is the way out.
+  if (!state.projectMissing && !state.reopenError) return stamp.revision;
+  try {
+    await api(projectPath('/revision'));
+  } catch (error) {
+    if (error.code === 'schema.project_not_found') return 'gone';
+    throw error;
+  }
+  state.projectMissing = false;
+  syncUnsaved();
+  redrawForChange();
+  return stamp.revision;
+}
+
+/** One save at a time: a second would carry a revision the first is about to replace. */
+function saveProject() {
+  if (!state.saving) state.saving = writeProject().finally(() => { state.saving = null; });
+  return state.saving;
+}
+
+async function writeProject() {
+  const invalid = firstInvalidField();
+  if (invalid) {
+    invalid.closest('details')?.setAttribute('open', '');
+    invalid.focus();
+    const failure = new Error('This field needs a number. Enter one, or undo the change.');
+    failure.code = 'ui.blank_number';
+    throw failure;
+  }
+  const stamp = currentStamp();
+  const sent = editableJson();
+  let reply;
+  try {
+    const revision = await revisionToSave(stamp);
+    reply = await request(projectPath(), { method: 'PUT', body: state.project, revision });
+  } catch (error) {
+    // Point at the scenario the error names, rather than leaving the reader to hunt.
+    const named = /scenario\[([^\]]+)\]/.exec(error.message);
+    if (named && state.project.scenarios.some((s) => s.id === named[1])) {
+      state.selected = named[1];
+      if (state.view === 'scenarios') renderScenarios();
+    }
+    throw error;
+  }
+  if (state.project?.name !== stamp.project) return reply.body;
+  // Anything typed while the save was on its way is not in it, and is still unsaved.
+  const typedSince = editableJson() === sent ? null : editableJson();
+  state.project = reply.body;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
+  // Results were produced from the old assumptions and are now stale. Throwing them
+  // away is the only honest thing to do: a chart next to assumptions it was not
+  // produced from is worse than no chart.
+  const hadResults = Boolean(state.run);
+  dropDerivedResults();
+  markSaved();
+  if (typedSince) {
+    restoreEditable(typedSince);
+    syncUnsaved();
+  }
+  renderProjectSummary(reply.body);
+  // The inputs on screen are bound to the object just replaced. Redraw them, or the
+  // next edit changes that old object and the next save silently drops it.
+  show(state.view, { keepScroll: true });
+  toast(hadResults ? 'Saved. Run again to refresh results.' : 'Saved.', null, true);
+  await refreshProjects();
+  return reply.body;
+}
+
+/**
+ * The server runs what is saved, not what is on screen. Anything that reads the project
+ * saves first, so a result can never quietly ignore the edits above it.
+ */
+async function ensureSaved() {
+  if (!isUnsaved()) return true;
+  try {
+    await saveProject();
+    return true;
+  } catch (error) {
+    reportFailure(error);
+    return false;
+  }
+}
+
+function onKey(event) {
+  const mod = event.ctrlKey || event.metaKey;
+  const target = event.target;
+  const typing = target instanceof HTMLElement &&
+    (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+  const modal = document.getElementById('dialog').open;
+
+  if (mod && event.key.toLowerCase() === 'q' && state.desktop) {
+    event.preventDefault();
+    quitApp();
+    return;
+  }
+  if (modal) return;
+
+  if (mod && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    if (isUnsaved()) guard(saveProject);
+  } else if (mod && event.key === 'Enter') {
+    event.preventDefault();
+    if (state.project?.dataset) runAll();
+  } else if (mod && /^[1-5]$/.test(event.key)) {
+    event.preventDefault();
+    if (state.project) show(VIEWS[Number(event.key) - 1]);
+  } else if (mod && event.key.toLowerCase() === 'd') {
+    event.preventDefault();
+    if (state.project && state.view === 'scenarios') duplicateSelected();
+  } else if (mod && event.key.toLowerCase() === 'z' && !typing) {
+    // In a text field, Ctrl+Z belongs to that field.
+    event.preventDefault();
+    if (event.shiftKey) redo(); else undo();
+  } else if (event.key === '?' && !typing && !mod) {
+    event.preventDefault();
+    showHelp();
+  }
+}
+
+function showHelp() {
+  openDialog((dialog, close) => {
+    dialog.appendChild(el('h3', { text: 'Help' }));
+    const keys = [
+      ['Ctrl+S', 'Save the project'],
+      ['Ctrl+Enter', 'Save if needed, then run all scenarios'],
+      ['Ctrl+1 to Ctrl+5', 'Go to data, scenarios, results, sensitivity, export'],
+      ['Ctrl+D', 'Duplicate the selected scenario'],
+      ['Ctrl+Z, Ctrl+Shift+Z', 'Undo and redo scenario changes (outside a text field)'],
+      ['?', 'Show this help'],
+    ];
+    if (state.desktop) keys.push(['Ctrl+Q', 'Quit']);
+    dialog.appendChild(el('h4', { text: 'Keyboard' }));
+    dialog.appendChild(el('div', { class: 'keys' }, keys.flatMap(([key, what]) => [
+      el('kbd', { text: key }), el('span', { text: what }),
+    ])));
+
+    dialog.appendChild(el('h4', { text: 'What the model does not do' }));
+    dialog.appendChild(el('p', { text: state.session.disclaimer }));
+    dialog.appendChild(el('ul', {}, state.session.model_exclusions.map((line) => el('li', { text: line }))));
+
+    dialog.appendChild(el('h4', { text: 'Where things are' }));
+    dialog.appendChild(el('p', { class: 'mono', text: state.session.workspace }));
+    dialog.appendChild(el('p', {}, [
+      outsideLink('source', 'Source code', state.session.source_url),
+      document.createTextNode(', '),
+      outsideLink('support', state.session.support_email, `mailto:${state.session.support_email}`),
+    ]));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Close', onclick: () => close(null) }),
+    ]));
+  });
+}
+
+/** A link that leaves Tonans. The shell opens it with the OS, by name, never by URL. */
+function outsideLink(name, text, href) {
+  const link = el('a', { href, text, target: '_blank', rel: 'noreferrer' });
+  link.addEventListener('click', (event) => {
+    if (!state.desktop) return;
+    event.preventDefault();
+    guard(() => shell('open_link', { link: name }));
+  });
+  return link;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,47 +1119,183 @@ function renderData() {
   clear(root);
   const project = state.project;
 
-  if (project.dataset) {
-    root.appendChild(datasetSummary(project.dataset));
-  }
-
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: project.dataset ? 'Replace the interval data' : 'Import interval data' }));
-  card.appendChild(el('p', { class: 'muted', text:
-    'Tonans reads the file you choose and nothing else. It does not guess a delimiter, infer the ' +
-    'interval from the first two rows, or assume a column is kilowatts because it is called "load". ' +
-    'You state the timezone, the interval, and the unit of every column — and every column in the ' +
-    'file must be either mapped or explicitly ignored.' }));
-
-  const picker = el('input', { type: 'file', accept: '.csv,text/csv', id: 'csv-file' });
-  picker.addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const receipt = await guard(() => api('/api/upload', { method: 'POST', raw: bytes, filename: file.name }));
-    if (!receipt) return;
-    state.upload = receipt;
-    renderData();
-  });
-  card.appendChild(el('div', { class: 'row', style: { marginTop: '10px' } }, picker));
-  root.appendChild(card);
-
+  if (state.justImported) root.appendChild(importedBanner(state.justImported));
   if (state.upload) root.appendChild(mappingCard(state.upload));
+  if (project.dataset) root.appendChild(dataSummary(project.dataset));
+  if (!state.upload) root.appendChild(sourceChooser(project));
+  root.appendChild(notesCard(project));
 }
 
-function datasetSummary(dataset) {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: 'Imported data' }));
+/** What just happened, and the one thing to do about it. */
+function importedBanner(imported) {
+  const next = state.project.scenarios.length > 1
+    ? el('button', { type: 'button', class: 'primary', text: 'Review the scenarios', onclick: () => show('scenarios') })
+    : el('button', { type: 'button', class: 'primary', text: 'Add a scenario to compare', onclick: addScenario });
+  const series = state.project.dataset?.series ?? {};
+  const hasPrices = Boolean(series.import_price && series.export_price);
+  const flat = state.project.scenarios.filter((s) => s.tariff.import.source === 'flat');
+  const usePrices = hasPrices && flat.length
+    ? el('button', { type: 'button', text: 'Use the imported prices in every scenario', onclick: () => {
+      change('use the imported prices', () => {
+        for (const scenario of state.project.scenarios) {
+          scenario.tariff.import = { source: 'series' };
+          scenario.tariff.export = { source: 'series' };
+        }
+      });
+      renderData();
+      toast('Every scenario now prices energy from your file.', null, true, { label: 'Undo', run: undo });
+    } })
+    : null;
+  return el('div', { class: 'banner ok' }, [
+    el('p', { text: `Imported ${imported.interval_count.toLocaleString()} intervals.` }),
+    flat.length
+      ? el('p', { text: hasPrices
+        ? 'Your file has price columns. The tariff is still the example flat rate.'
+        : 'The tariff is still the example flat rate.' })
+      : null,
+    imported.warnings?.length ? ledger(imported.warnings) : null,
+    el('div', { class: 'row' }, [next, usePrices]),
+  ]);
+}
+
+function sourceChooser(project) {
+  const box = el('section', { class: 'stack' });
+  box.appendChild(el('h3', { text: project.dataset ? 'Replace the interval data' : 'Import interval data' }));
+
+  const picker = el('input', { type: 'file', accept: '.csv,text/csv', id: 'csv-file', class: 'hidden' });
+  picker.addEventListener('change', async () => {
+    const file = picker.files[0];
+    picker.value = '';
+    if (!file) return;
+    // From the file's metadata, before any of it is read: a page that reads first runs
+    // out of memory on the file it was going to refuse.
+    const refusal = fileTooLarge(file.name, file.size, state.session.limits.max_csv_bytes);
+    if (refusal) {
+      toast(refusal, 'limit.csv_bytes');
+      return;
+    }
+    const into = state.project.name;
+    const receipt = await guard(async () => {
+      const bytes = await readFile(file);
+      return api('/api/upload', { method: 'POST', raw: bytes, filename: file.name });
+    });
+    if (receipt) receiveUpload(receipt, into);
+  });
+  const sample = el('button', { type: 'button', text: 'Use the sample data', onclick: async () => {
+    const into = state.project.name;
+    const receipt = await guard(() => api('/api/upload/sample', { method: 'POST' }));
+    if (receipt) receiveUpload(receipt, into);
+  } });
+  const template = el('button', { type: 'button', text: 'Save a CSV template', onclick: saveTemplate });
+  box.appendChild(el('div', { class: 'row' }, [
+    picker,
+    el('button', { type: 'button', class: project.dataset ? '' : 'primary', text: 'Choose a CSV file',
+                   onclick: () => picker.click() }),
+    sample,
+    template,
+  ]));
+  box.appendChild(el('p', { class: 'tiny muted', text:
+    'Sample: one synthetic year of hourly data for an invented light-industrial site. ' +
+    'Template: every column that can be read, with three example rows.' }));
+  return box;
+}
+
+/** The page's own error for a file that has gone is a number and a riddle. */
+async function readFile(file) {
+  try {
+    return new Uint8Array(await file.arrayBuffer());
+  } catch {
+    const error = new Error(`Could not read "${file.name}". It may have been moved or deleted, or you may not have permission to read it.`);
+    error.code = 'ui.file_unreadable';
+    throw error;
+  }
+}
+
+function receiveUpload(receipt, into) {
+  // The user has moved on to another project, and this file was not meant for it.
+  if (state.project?.name !== into) {
+    api('/api/upload/cancel', { method: 'POST', body: { upload_id: receipt.upload_id } }).catch(() => {});
+    return;
+  }
+  state.upload = receipt;
+  state.mapping = receipt.headers.map(() => ({ role: '__unmapped', unit: '', why: null, check: null }));
+  state.importSettings = {
+    timezone: state.project.site.timezone, interval: '60', intervalNote: null, gap: 'reject', gapMax: '2',
+  };
+  state.mappingNotes = [];
+  state.mappingReviewed = false;
+  state.importError = null;
+  state.justImported = null;
+  renderData();
+  renderNext();
+}
+
+/** Tell the server to drop the file it is holding, now rather than at the next upload. */
+function forgetStagedUpload() {
+  if (!state.upload) return;
+  api('/api/upload/cancel', { method: 'POST', body: { upload_id: state.upload.upload_id } }).catch(() => {});
+}
+
+async function saveTemplate() {
+  if (state.desktop) {
+    const saved = await guard(() => shell('save_csv_template'));
+    if (saved) toast(`Saved ${saved}.`, null, true);
+    return;
+  }
+  const response = await fetch('/api/templates/interval-csv', { headers: { Authorization: `Bearer ${state.token}` } });
+  if (response.ok) downloadBlob(await response.blob(), 'tonans-interval-template.csv');
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = el('a', { href: url, download: filename });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** The imported data, described. No model is involved in any of these figures. */
+function dataSummary(dataset) {
+  const box = el('section', { class: 'stack' });
+  box.appendChild(el('h3', { text: 'What was imported' }));
+
+  const profile = state.profile;
+  if (profile) {
+    const tiles = [
+      tile('Peak load', fmt.kw(profile.load.peak_kw), fmt.when(profile.load.peak_utc)),
+      tile('Mean load', fmt.kw(profile.load.mean_kw), `${fmt.kwh(profile.load.energy_kwh)} in ${grouped(profile.covered_hours)} hours`),
+    ];
+    if (profile.generation) {
+      tiles.push(tile('Generation', fmt.kwh(profile.generation.energy_kwh), `peak ${fmt.kw(profile.generation.peak_kw)}`));
+      tiles.push(tile('Peak load net of generation', fmt.kw(profile.peak_net_load_kw), 'highest load minus generation in one interval'));
+    }
+    if (profile.critical_load) {
+      tiles.push(tile('Critical load', fmt.kw(profile.critical_load.mean_kw), `mean, peak ${fmt.kw(profile.critical_load.peak_kw)}`));
+    }
+    if (profile.import_price) {
+      tiles.push(tile('Import price', `${profile.import_price.mean.toFixed(3)} USD/kWh`,
+        `mean, from ${profile.import_price.min.toFixed(3)} to ${profile.import_price.max.toFixed(3)}`));
+    }
+    if (profile.export_price) {
+      tiles.push(tile('Export credit', `${profile.export_price.mean.toFixed(3)} USD/kWh`,
+        `mean, from ${profile.export_price.min.toFixed(3)} to ${profile.export_price.max.toFixed(3)}`));
+    }
+    box.appendChild(el('div', { class: 'tiles' }, tiles));
+    box.appendChild(monthCharts(profile));
+  }
+
+  if (dataset.import_warnings?.length) box.appendChild(ledger(dataset.import_warnings));
 
   const rows = [
     ['Source file', dataset.source.filename],
     ['Digest', dataset.source.sha256],
-    ['Size', `${dataset.source.size_bytes.toLocaleString()} bytes · ${dataset.source.row_count.toLocaleString()} data rows`],
-    ['Interval', `${dataset.interval_minutes} minutes · ${dataset.interval_count.toLocaleString()} intervals`],
+    ['Size', `${dataset.source.size_bytes.toLocaleString()} bytes, ${dataset.source.row_count.toLocaleString()} data rows`],
+    ['Interval', `${dataset.interval_minutes} minutes, ${dataset.interval_count.toLocaleString()} intervals`],
     ['Starts', fmt.when(dataset.start_utc)],
     ['Gap policy', dataset.gap_policy.mode.replace(/_/g, ' ')],
     ['Synthesized intervals', dataset.synthesized_interval_count === 0
-      ? 'none — every interval is a measurement'
+      ? 'none: every interval is a measurement'
       : `${dataset.synthesized_interval_count} of ${dataset.interval_count} were NOT measured`],
     ['Imported', fmt.when(dataset.source.imported_utc)],
   ];
@@ -371,61 +1304,145 @@ function datasetSummary(dataset) {
   for (const [key, value] of rows) {
     body.appendChild(el('tr', {}, [
       el('th', { scope: 'row', text: key }),
-      el('td', { class: key === 'Digest' ? 'mono tiny' : '', text: value }),
+      el('td', { class: key === 'Digest' ? 'mono' : '', text: value }),
+    ]));
+  }
+  for (const [role, column] of Object.entries(dataset.source.column_mapping)) {
+    body.appendChild(el('tr', {}, [
+      el('th', { scope: 'row', text: `Column for ${role.replace(/_/g, ' ')}` }),
+      el('td', { text: column }),
     ]));
   }
   table.appendChild(body);
-  card.appendChild(el('div', { class: 'scroll' }, table));
+  box.appendChild(el('details', {}, [
+    el('summary', { text: 'File, digest, and column mapping' }),
+    el('div', { class: 'scroll' }, table),
+  ]));
+  return box;
+}
 
-  card.appendChild(el('h4', { text: 'Column mapping' }));
-  const map = el('table');
-  const mapBody = el('tbody');
-  for (const [role, column] of Object.entries(dataset.source.column_mapping)) {
-    mapBody.appendChild(el('tr', {}, [el('th', { scope: 'row', text: role }), el('td', { text: column })]));
+function monthCharts(profile) {
+  const label = (m) => new Date(Date.UTC(m.year, m.month - 1, 1))
+    .toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' });
+  const charts = [
+    { title: 'Peak load by month, kW', role: 'load', read: (m) => m.peak_load_kw, format: fmt.kw },
+    { title: 'Load energy by month, kWh', role: 'load', read: (m) => m.load_kwh, format: fmt.kwh },
+  ];
+  if (profile.generation) {
+    charts.push({ title: 'Generation by month, kWh', role: 'generation', read: (m) => m.generation_kwh, format: fmt.kwh });
   }
-  map.appendChild(mapBody);
-  card.appendChild(el('div', { class: 'scroll' }, map));
 
-  if (dataset.import_warnings?.length) card.appendChild(ledger(dataset.import_warnings));
-  return card;
+  const grid = el('div', { class: 'months' });
+  for (const chart of charts) {
+    const values = profile.months.map(chart.read);
+    const high = Math.max(...values, 1e-9);
+    const peak = values.indexOf(Math.max(...values));
+    const columns = el('div', { class: 'columns' });
+    profile.months.forEach((month, index) => {
+      columns.appendChild(el('div', {
+        class: 'column',
+        title: `${label(month)} ${month.year}: ${chart.format(values[index])}`,
+        style: { height: `${(values[index] / high) * 100}%`, background: paint(chart.role) },
+      }, index === peak ? el('span', { class: 'column-label', text: grouped(values[index]) }) : null));
+    });
+    grid.appendChild(el('div', {}, [
+      el('h4', { text: chart.title, style: { marginTop: '0' } }),
+      columns,
+      el('div', { class: 'column-axis' }, profile.months.map((m) => el('span', { text: label(m).slice(0, 1) }))),
+    ]));
+  }
+
+  const rows = profile.months.map((m) => [
+    `${label(m)} ${m.year}`, fmt.kw(m.peak_load_kw), fmt.kwh(m.load_kwh),
+    ...(profile.generation ? [fmt.kwh(m.generation_kwh)] : []),
+  ]);
+  const head = ['Month', 'Peak load', 'Load energy', ...(profile.generation ? ['Generation'] : [])];
+  const table = el('table', {}, [
+    el('thead', {}, el('tr', {}, head.map((h, i) => el('th', { class: i ? 'num' : '', text: h })))),
+    el('tbody', {}, rows.map((row) => el('tr', {}, row.map((cell, i) => el('td', { class: i ? 'num' : '', text: cell }))))),
+  ]);
+  return el('div', {}, [
+    grid,
+    el('details', {}, [el('summary', { text: 'These figures as a table' }), el('div', { class: 'scroll' }, table)]),
+  ]);
+}
+
+function notesCard(project) {
+  const notes = el('textarea', { rows: '3', maxlength: String(state.session.limits.max_notes_chars ?? 4000) });
+  notes.value = project.notes ?? '';
+  notes.addEventListener('input', () => {
+    recordEdit('project-notes', 'edit notes', () => { project.notes = notes.value; });
+  });
+  return el('section', { class: 'stack' }, [
+    el('h3', { text: 'Notes' }),
+    notes,
+  ]);
 }
 
 function mappingCard(receipt) {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: `Map the columns of ${receipt.filename}` }));
-  card.appendChild(el('p', { class: 'muted', text:
-    `${receipt.row_count.toLocaleString()} data rows, ${receipt.headers.length} columns. ` +
-    `Digest ${receipt.sha256}. Nothing has been interpreted yet.` }));
+  const card = el('section', { class: 'panel stack' });
+  const settings = state.importSettings;
+  card.appendChild(el('div', {}, [
+    el('h3', { text: `Map the columns of ${receipt.filename}` }),
+    el('p', { class: 'lede', text:
+      `${receipt.row_count.toLocaleString()} data rows, ${receipt.headers.length} columns.` }),
+    el('p', { class: 'mono tiny muted', text: receipt.sha256 }),
+  ]));
 
-  const settings = el('div', { class: 'grid' }, [
-    field('Timezone (IANA)', el('input', { type: 'text', id: 'imp-tz', value: state.project.site.timezone })),
-    field('Interval (minutes)', el('input', { type: 'number', id: 'imp-interval', value: '60', min: '1', max: '60' })),
-    field('Missing intervals', select('imp-gap', [
-      ['reject', 'Reject the file (default, and the safe choice)'],
-      ['fill_zero', 'Fill with zero — the filled intervals are NOT measurements'],
-      ['hold_last_value', 'Hold the previous value — the filled intervals are NOT measurements'],
-    ], 'reject')),
-    field('Longest run to fill', el('input', { type: 'number', id: 'imp-gap-max', value: '2', min: '1', max: '24' })),
-  ]);
-  card.appendChild(settings);
+  const timezone = timezoneInput(settings.timezone);
+  timezone.id = 'imp-tz';
+  timezone.addEventListener('input', () => { settings.timezone = timezone.value; });
+  const interval = el('input', { type: 'number', id: 'imp-interval', value: settings.interval, min: '1', max: '60' });
+  interval.addEventListener('input', () => { settings.interval = interval.value; settings.intervalNote = null; });
+  const gap = select('imp-gap', [
+    ['reject', 'Reject the file'],
+    ['fill_zero', 'Fill with zero'],
+    ['hold_last_value', 'Hold the previous value'],
+  ], settings.gap);
+  gap.addEventListener('change', () => { settings.gap = gap.value; });
+  const gapMax = el('input', { type: 'number', id: 'imp-gap-max', value: settings.gapMax, min: '1', max: '24' });
+  gapMax.addEventListener('input', () => { settings.gapMax = gapMax.value; });
+
+  card.appendChild(el('div', { class: 'grid' }, [
+    field('Timezone (IANA name)', timezone),
+    el('div', { class: 'field' }, [
+      el('label', { text: 'Interval (minutes)' }),
+      interval,
+      settings.intervalNote ? el('span', { class: 'field-note', text: settings.intervalNote }) : null,
+    ]),
+    field('Missing intervals', gap),
+    field('Longest run to fill', gapMax),
+  ]));
+
+  const suggest = el('button', { type: 'button', text: 'Suggest mapping from headers', onclick: () => suggestFromHeaders(receipt) });
+  card.appendChild(el('div', { class: 'row' }, [
+    suggest,
+    el('span', { class: 'tiny muted', text: 'Fills the choices below from your column names.' }),
+  ]));
+  // A column left unsuggested is a question for the user, so it is not set in small print.
+  if (state.mappingNotes.length) {
+    card.appendChild(el('div', { class: 'banner' }, state.mappingNotes.map((note) => el('p', { text: note }))));
+  }
 
   const table = el('table', { class: 'map-table' });
   table.appendChild(el('thead', {}, el('tr', {}, [
     el('th', { text: 'Column in your file' }),
-    el('th', { text: 'First value' }),
+    el('th', { text: 'First values' }),
     el('th', { text: 'Means' }),
     el('th', { text: 'Unit' }),
+    el('th', { text: 'Why this was suggested' }),
   ])));
   const body = el('tbody');
 
   receipt.headers.forEach((header, index) => {
+    const entry = state.mapping[index];
     const roleSelect = select(`role-${index}`, [
       ['__unmapped', 'Choose meaning…'],
       ['__timestamp', 'Timestamp'],
       ...ROLES.map(([id, label]) => [id, label]),
       ['demand_period', 'Demand-charge period label'],
       ['__ignore', 'Ignore this column'],
-    ], '__unmapped');
+    ], entry.role);
 
     const unitSelect = select(`unit-${index}`, [['', '—']], '');
     const syncUnits = () => {
@@ -442,28 +1459,110 @@ function mappingCard(receipt) {
       for (const unit of spec[2]) {
         unitSelect.appendChild(el('option', { value: unit, text: UNIT_LABELS[unit] }));
       }
-      unitSelect.value = '';
+      unitSelect.value = spec[2].includes(entry.unit) ? entry.unit : '';
     };
-    roleSelect.addEventListener('change', syncUnits);
     syncUnits();
 
-    body.appendChild(el('tr', {}, [
+    const why = el('td');
+    const row = el('tr', {}, [
       el('td', { class: 'mono', text: header }),
-      el('td', { class: 'sample', text: receipt.sample_rows[0]?.[index] ?? '' }),
+      el('td', {}, receipt.sample_rows.slice(0, 2).map((sampleRow) =>
+        el('div', { class: 'sample', text: sampleRow[index] ?? '' }))),
       el('td', {}, roleSelect),
       el('td', {}, unitSelect),
-    ]));
+      why,
+    ]);
+    const paintWhy = () => {
+      clear(why);
+      row.className = entry.why ? (entry.check ? 'suggested-check' : 'suggested') : '';
+      if (entry.why) why.appendChild(el('span', { class: 'why', text: entry.why }));
+      if (entry.check) why.appendChild(el('span', { class: 'why check', text: entry.check }));
+    };
+    paintWhy();
+
+    // A row the user has touched is the user's: its reason no longer applies.
+    roleSelect.addEventListener('change', () => {
+      entry.role = roleSelect.value;
+      entry.unit = '';
+      entry.why = null;
+      entry.check = null;
+      syncUnits();
+      paintWhy();
+      syncImportButton();
+    });
+    unitSelect.addEventListener('change', () => {
+      entry.unit = unitSelect.value;
+      entry.check = null;
+      paintWhy();
+    });
+    body.appendChild(row);
   });
   table.appendChild(body);
   card.appendChild(el('div', { class: 'scroll' }, table));
 
-  const go = el('button', { class: 'primary', type: 'button', text: 'Import' });
+  if (state.importError) {
+    card.appendChild(el('div', { class: 'banner critical' }, [
+      el('span', { class: 't-code', text: state.importError.code }),
+      el('p', { text: state.importError.message }),
+      el('p', { class: 'tiny muted', text: 'The file is still loaded. Fix the mapping above and import again.' }),
+    ]));
+  }
+
+  const go = el('button', { class: 'primary', type: 'button', text: 'Import', id: 'run-import' });
   go.addEventListener('click', () => runImport(receipt));
-  card.appendChild(el('div', { class: 'row', style: { marginTop: '12px' } }, [
+  const review = el('label', { class: 'field-row', id: 'mapping-review' });
+  const tick = el('input', { type: 'checkbox', id: 'mapping-reviewed' });
+  tick.checked = state.mappingReviewed;
+  tick.addEventListener('change', () => { state.mappingReviewed = tick.checked; syncImportButton(); });
+  review.appendChild(tick);
+  review.appendChild(el('span', { text: 'I have checked the suggested rows against my file.' }));
+  card.appendChild(el('div', { class: 'row' }, [
+    review,
     go,
-    el('button', { type: 'button', text: 'Cancel', onclick: () => { state.upload = null; renderData(); } }),
+    el('button', { type: 'button', text: 'Cancel', onclick: () => { forgetStagedUpload(); state.upload = null; state.mapping = null; renderData(); renderNext(); } }),
   ]));
+  setTimeout(syncImportButton, 0);
   return card;
+}
+
+/** While any suggestion stands unreviewed, the import waits for the tick. */
+function syncImportButton() {
+  const go = document.getElementById('run-import');
+  const review = document.getElementById('mapping-review');
+  // Leaving a project clears the mapping and can leave its hidden card behind.
+  if (!go || !review || !state.mapping) return;
+  const standing = state.mapping.some((entry) => entry.why);
+  review.classList.toggle('hidden', !standing);
+  go.disabled = standing && !state.mappingReviewed;
+  if (state.busy) go.disabled = true;
+  go.textContent = state.busy?.what === 'import' ? BUSY_LABEL.import : 'Import';
+}
+
+async function suggestFromHeaders(receipt) {
+  const found = await guard(() => api('/api/upload/suggest', {
+    method: 'POST',
+    body: { upload_id: receipt.upload_id },
+  }));
+  if (!found) return;
+  const byHeader = new Map(found.columns.map((column) => [column.header, column]));
+  receipt.headers.forEach((header, index) => {
+    const column = byHeader.get(header);
+    const entry = state.mapping[index];
+    if (!column) return;
+    entry.role = column.role === 'timestamp' ? '__timestamp' : column.role;
+    entry.unit = column.unit ?? '';
+    entry.why = column.reason;
+    entry.check = column.check;
+  });
+  state.mappingReviewed = false;
+  state.mappingNotes = found.notes;
+  if (found.interval_minutes) {
+    state.importSettings.interval = String(found.interval_minutes);
+    state.importSettings.intervalNote = `The first two timestamps are ${found.interval_minutes} minutes apart.`;
+  }
+  renderData();
+  const applied = found.columns.length;
+  toast(`Suggested ${applied} of ${receipt.headers.length} columns.`, null, true);
 }
 
 async function runImport(receipt) {
@@ -471,6 +1570,7 @@ async function runImport(receipt) {
   const ignore = [];
   const unresolved = [];
   const missingUnits = [];
+  const repeated = [];
   let timestamp = null;
   let demandPeriod = null;
 
@@ -478,11 +1578,16 @@ async function runImport(receipt) {
     const role = document.getElementById(`role-${index}`).value;
     const unit = document.getElementById(`unit-${index}`).value;
     if (role === '__unmapped') unresolved.push(header);
-    else if (role === '__timestamp') timestamp = header;
-    else if (role === '__ignore') ignore.push(header);
-    else if (role === 'demand_period') demandPeriod = header;
-    else {
+    else if (role === '__timestamp') {
+      if (timestamp) repeated.push(`${timestamp} and ${header} are both the timestamp`);
+      timestamp = header;
+    } else if (role === '__ignore') ignore.push(header);
+    else if (role === 'demand_period') {
+      if (demandPeriod) repeated.push(`${demandPeriod} and ${header} are both the period label`);
+      demandPeriod = header;
+    } else {
       if (!unit) missingUnits.push(header);
+      if (series[role]) repeated.push(`${series[role].header} and ${header} both mean ${role.replace(/_/g, ' ')}`);
       series[role] = { header, unit };
     }
   });
@@ -491,176 +1596,334 @@ async function runImport(receipt) {
     toast(`Choose a meaning or Ignore for: ${unresolved.join(', ')}`, 'ui.unmapped_columns');
     return;
   }
+  if (repeated.length) {
+    toast(`One column per meaning: ${repeated.join('; ')}.`, 'ui.repeated_meaning');
+    return;
+  }
   if (missingUnits.length) {
     toast(`Choose a unit for: ${missingUnits.join(', ')}`, 'ui.missing_units');
     return;
   }
   if (!timestamp) { toast('One column must be the timestamp.', 'ui.no_timestamp'); return; }
-  if (!series.load) { toast('One column must be the load. Tonans cannot run without it.', 'ui.no_load'); return; }
+  if (!series.load) { toast('One column must be the load.', 'ui.no_load'); return; }
 
   const mode = document.getElementById('imp-gap').value;
   const max = Number(document.getElementById('imp-gap-max').value);
   const gap_policy = mode === 'reject' ? { mode: 'reject' } : { mode, max_consecutive_intervals: max };
 
-  const result = await guard(() => api(`/api/projects/${encodeURIComponent(state.project.name)}/import`, {
-    method: 'POST',
-    body: {
-      upload_id: receipt.upload_id,
-      request: {
-        filename: receipt.filename,
-        timezone: document.getElementById('imp-tz').value.trim(),
-        interval_minutes: Number(document.getElementById('imp-interval').value),
-        gap_policy,
-        mapping: { timestamp, series, demand_period: demandPeriod, ignore_columns: ignore },
-      },
-    },
-  }));
-  if (!result) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  if (!(await settleUnsaved('import this file'))) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
 
+  const into = state.project.name;
+  const sent = editableJson();
+  const mark = markBusy('import', currentStamp());
+  syncImportButton();
+  let reply;
+  try {
+    reply = await request(projectPath('/import'), {
+      method: 'POST',
+      body: {
+        upload_id: receipt.upload_id,
+        request: {
+          filename: receipt.filename,
+          timezone: document.getElementById('imp-tz').value.trim(),
+          interval_minutes: Number(document.getElementById('imp-interval').value),
+          gap_policy,
+          mapping: { timestamp, series, demand_period: demandPeriod, ignore_columns: ignore },
+        },
+      },
+    });
+  } catch (error) {
+    releaseBusy(mark);
+    redrawAfterJob();
+    if (state.project?.name !== into) {
+      toast(`The import into "${into}" failed: ${error.message}`, error.code);
+      return;
+    }
+    // An import error names the row and column to fix, so it stays on screen.
+    state.importError = { code: error.code, message: error.message };
+    renderData();
+    return;
+  }
+  releaseBusy(mark);
+  // The file went into the project it was meant for, whichever one is on screen now.
+  if (state.project?.name !== into) {
+    redrawAfterJob();
+    toast(`Finished importing into "${into}".`, null, true);
+    await refreshProjects();
+    return;
+  }
+
+  // Anything typed while the file was being read is not in the reply, and is still unsaved.
+  const typedSince = editableJson() === sent ? null : editableJson();
+  const result = reply.body;
   state.project = result.project;
+  state.revision = reply.revision;
+  state.changedElsewhere = false;
+  state.projectMissing = false;
+  state.reopenError = null;
   state.upload = null;
-  state.run = null;
-  toast(`Imported ${result.import.interval_count.toLocaleString()} intervals.`, null, true);
-  await openProject(state.project.name);
+  state.mapping = null;
+  state.importError = null;
+  dropDerivedResults();
+  markSaved();
+  if (typedSince) {
+    restoreEditable(typedSince);
+    syncUnsaved();
+  }
+  // Straight away: the inputs on screen are bound to the object just replaced, and typing into
+  // them during the next wait would go nowhere.
+  if (state.view === 'data') renderData();
+  const profile = await guard(() => api(projectPath('/profile')));
+  if (state.project?.name !== into) return;
+  state.profile = profile;
+  state.justImported = result.import;
+  renderProjectSummary(state.project);
+  await refreshProjects();
+  show('data');
 }
 
 // ---------------------------------------------------------------------------
 // 2 — Scenarios
 // ---------------------------------------------------------------------------
 
+const POLICY_NAMES = {
+  self_consumption: 'Self-consumption',
+  peak_limit: 'Peak limit',
+  reserve_first: 'Reserve first',
+  manual_schedule: 'Manual schedule',
+};
+
+function selectedScenario() {
+  const project = state.project;
+  return project.scenarios.find((s) => s.id === state.selected) ?? project.scenarios[0];
+}
+
 function renderScenarios() {
   const root = document.getElementById('view-scenarios');
   clear(root);
   const project = state.project;
-
-  const head = el('div', { class: 'card' });
-  head.appendChild(el('h3', { text: 'Scenarios' }));
-  head.appendChild(el('p', { class: 'muted', text:
-    'Each scenario is self-describing: what you read here is exactly what the engine used. ' +
-    'Every scenario is compared against the baseline. Dispatch policies are named rules evaluated ' +
-    'interval by interval with no view of the future — Tonans does not optimise and never claims an ' +
-    'optimal result.' }));
-
-  const controls = el('div', { class: 'row', style: { marginTop: '10px' } });
   const max = state.session.limits.max_scenarios;
-  const add = el('button', { type: 'button', text: '+ Add scenario' });
-  add.disabled = project.scenarios.length >= max;
-  add.addEventListener('click', () => {
-    const id = `scenario-${project.scenarios.length + 1}`;
-    const template = structuredClone(project.scenarios.find((s) => s.battery) || project.scenarios[0]);
-    template.id = id;
-    template.name = `Scenario ${project.scenarios.length + 1}`;
-    if (!template.battery) {
-      template.battery = {
-        nameplate_energy_kwh: 200, max_charge_kw: 100, max_discharge_kw: 100,
-        soc_min_pct: 10, soc_max_pct: 100, reserve_soc_pct: 25,
-        charge_efficiency_pct: 95, discharge_efficiency_pct: 95, self_discharge_pct_per_month: 1.5,
-      };
-      template.inverter.battery_power_kw = 100;
-      template.initial_soc_pct = 50;
-      template.economics.capex_usd = 110000;
-    }
-    project.scenarios.push(template);
-    renderScenarios();
-  });
-  controls.appendChild(add);
-  if (project.scenarios.length >= max) {
-    controls.appendChild(el('span', { class: 'tiny muted', text:
-      `A project holds up to ${max} scenarios.` }));
+  const scenario = selectedScenario();
+  state.selected = scenario.id;
+
+  root.appendChild(el('h3', { text: 'Scenarios' }));
+
+  if (project.scenarios.length > 1) root.appendChild(assumptionDiff(project));
+
+  const feeders = el('nav', { class: 'feeders', 'aria-label': 'Scenarios' });
+  const list = el('ul', { class: 'feeder-list' });
+  for (const entry of project.scenarios) {
+    list.appendChild(el('li', {}, el('button', {
+      type: 'button',
+      class: 'feeder',
+      'aria-current': entry.id === scenario.id ? 'true' : 'false',
+      onclick: () => { state.selected = entry.id; renderScenarios(); },
+    }, [
+      el('span', { class: 'feeder-name', dataset: { scenario: entry.id }, text: entry.name }),
+      el('span', { class: 'feeder-meta', text: feederNote(entry, project) }),
+    ])));
   }
-  const save = el('button', { class: 'primary', type: 'button', text: 'Save project' });
-  save.addEventListener('click', () => guard(saveProject));
-  controls.appendChild(save);
-  head.appendChild(controls);
-  root.appendChild(head);
+  feeders.appendChild(list);
+  const add = el('button', { type: 'button', class: project.scenarios.length < 2 ? 'primary' : '',
+                             text: 'Add a scenario', onclick: addScenario });
+  add.disabled = project.scenarios.length >= max;
+  feeders.appendChild(el('div', { class: 'row' }, add));
+  if (project.scenarios.length >= max) {
+    feeders.appendChild(el('p', { class: 'tiny muted', text: `A project holds up to ${max} scenarios.` }));
+  }
 
-  const baselineSelect = select('baseline-pick',
-    project.scenarios.map((s) => [s.id, s.name]), project.baseline_scenario_id);
-  baselineSelect.addEventListener('change', () => { project.baseline_scenario_id = baselineSelect.value; });
-  root.appendChild(el('div', { class: 'card' }, [
-    el('h3', { text: 'Baseline' }),
-    el('p', { class: 'muted', text: 'Every saving, delta, and NPV in this project is measured against this scenario.' }),
-    baselineSelect,
-  ]));
-
-  project.scenarios.forEach((scenario, index) => root.appendChild(scenarioEditor(scenario, index)));
+  root.appendChild(el('div', { class: 'scenario-layout' }, [feeders, scenarioEditor(scenario)]));
 }
 
-function scenarioEditor(scenario, index) {
-  const card = el('div', { class: 'card' });
-  const isBaseline = scenario.id === state.project.baseline_scenario_id;
+function feederNote(scenario, project) {
+  const parts = [];
+  if (scenario.id === project.baseline_scenario_id) parts.push('Baseline');
+  parts.push(scenario.battery
+    ? `${formatAxis(scenario.battery.nameplate_energy_kwh)} kWh, ${formatAxis(scenario.battery.max_discharge_kw)} kW`
+    : 'No battery');
+  parts.push(POLICY_NAMES[scenario.dispatch.policy]);
+  return parts.join(', ');
+}
 
-  const header = el('div', { class: 'row spread' });
-  header.appendChild(el('h3', { text: scenario.name + (isBaseline ? '  (baseline)' : '') }));
-  if (state.project.scenarios.length > 1) {
-    const remove = el('button', { class: 'danger', type: 'button', text: 'Remove' });
-    remove.addEventListener('click', () => {
-      state.project.scenarios.splice(index, 1);
-      if (isBaseline) state.project.baseline_scenario_id = state.project.scenarios[0].id;
+/** Every assumption, side by side, with what differs from the baseline marked. */
+function assumptionDiff(project) {
+  const dash = '—';
+  const price = (source, series) => (source.source === 'flat' ? `${source.price_per_kwh_usd} USD/kWh` : series);
+  const rows = [
+    ['Battery energy', (s) => (s.battery ? `${s.battery.nameplate_energy_kwh} kWh` : dash)],
+    ['Battery power', (s) => (s.battery ? `${s.battery.max_discharge_kw} kW` : dash)],
+    ['Reserve floor', (s) => (s.battery ? `${s.battery.reserve_soc_pct} %` : dash)],
+    ['Round trip', (s) => (s.battery
+      ? `${(s.battery.charge_efficiency_pct * s.battery.discharge_efficiency_pct / 100).toFixed(1)} %` : dash)],
+    ['Temperature derating', (s) => (s.battery?.temperature_derate ? `${s.battery.temperature_derate.points.length} points` : dash)],
+    ['Dispatch policy', (s) => POLICY_NAMES[s.dispatch.policy]],
+    ['Import ceiling', (s) => (s.dispatch.policy === 'peak_limit' ? `${s.dispatch.import_limit_kw} kW` : dash)],
+    ['Reserve target', (s) => (s.dispatch.policy === 'reserve_first' ? `${s.dispatch.reserve_target_soc_pct} %` : dash)],
+    ['Grid charging', (s) => (s.dispatch.allow_grid_charge === undefined ? dash : (s.dispatch.allow_grid_charge ? 'Allowed' : 'Not allowed'))],
+    ['Import price', (s) => price(s.tariff.import, 'From data')],
+    ['Export credit', (s) => price(s.tariff.export, 'From data')],
+    ['Import price multiplier', (s) => `${s.tariff.import_price_multiplier} x`],
+    ['Demand charge', (s) => {
+      const entries = Object.entries(s.tariff.demand_prices_per_kw_month_usd ?? {});
+      return entries.length ? entries.map(([k, v]) => `${k} ${v}`).join(', ') + ' USD/kW-month' : 'None';
+    }],
+    ['Fixed charge', (s) => `${s.tariff.fixed_charge_usd_per_month} USD/month`],
+    ['Site export limit', (s) => (s.inverter.site_export_limit_kw ?? null) === null ? 'Unlimited' : `${s.inverter.site_export_limit_kw} kW`],
+    ['Installed cost', (s) => fmt.usd(s.economics.capex_usd)],
+    ['Operating cost', (s) => `${fmt.usd(s.economics.annual_opex_usd)}/year`],
+    ['Replacement', (s) => (s.economics.replacement
+      ? `${fmt.usd(s.economics.replacement.cost_usd)} at ${s.economics.replacement.trigger_capacity_pct} %` : 'None')],
+    ['Horizon and discount rate', (s) => `${s.economics.horizon_years} years, ${s.economics.discount_rate_pct_per_year} %`],
+    ['Energy escalation', (s) => `${s.economics.energy_price_escalation_pct_per_year} %/year`],
+    ['Calendar fade', (s) => `${s.degradation.calendar_fade_pct_per_year} %/year`],
+    ['Cycle fade', (s) => `${s.degradation.cycle_fade_pct_per_cycle} %/cycle`],
+    ['Outage windows', (s) => String(s.outage.windows?.length ?? 0)],
+  ];
+  const baseline = project.scenarios.find((s) => s.id === project.baseline_scenario_id) ?? project.scenarios[0];
+
+  const head = el('tr', {}, [el('th', { text: 'Assumption' }), ...project.scenarios.map((s) =>
+    el('th', { class: 'num' }, el('button', { type: 'button', text: s.name, onclick: () => {
+      state.selected = s.id;
       renderScenarios();
-    });
-    header.appendChild(remove);
+    } })))]);
+  const body = el('tbody');
+  for (const [label, read] of rows) {
+    const reference = read(baseline);
+    body.appendChild(el('tr', {}, [
+      el('th', { scope: 'row', text: label }),
+      ...project.scenarios.map((s) => {
+        const value = read(s);
+        return el('td', { class: `num${value !== reference ? ' differs' : ''}`, text: value });
+      }),
+    ]));
   }
-  card.appendChild(header);
-
-  const bind = (obj, key) => (event) => {
-    const value = event.target.type === 'number' ? Number(event.target.value)
-                : event.target.type === 'checkbox' ? event.target.checked
-                : event.target.value;
-    obj[key] = value;
-  };
-  const num = (obj, key, step = 'any') => {
-    const input = el('input', { type: 'number', step, value: String(obj[key] ?? 0) });
-    input.addEventListener('input', bind(obj, key));
-    return input;
-  };
-  const text = (obj, key) => {
-    const input = el('input', { type: 'text', value: String(obj[key] ?? '') });
-    input.addEventListener('input', bind(obj, key));
-    return input;
-  };
-  const check = (obj, key, label) => {
-    const input = el('input', { type: 'checkbox' });
-    input.checked = Boolean(obj[key]);
-    input.addEventListener('change', bind(obj, key));
-    return el('label', { class: 'field-row' }, [input, el('span', { text: label })]);
-  };
-
-  const identity = el('fieldset', {}, [
-    el('legend', { text: 'Identity' }),
-    el('div', { class: 'grid' }, [
-      field('Name', text(scenario, 'name')),
-      field('Id (stable, lowercase)', text(scenario, 'id')),
+  const details = el('details', { class: 'section', open: state.diffOpen ? 'open' : null }, [
+    el('summary', {}, [
+      el('span', { class: 'section-name', text: 'Compare assumptions' }),
+      el('span', { class: 'section-summary', text: 'Marked values differ from the baseline.' }),
     ]),
+    el('div', { class: 'scroll' }, el('table', { class: 'diff' }, [el('thead', {}, head), body])),
   ]);
-  card.appendChild(identity);
+  details.addEventListener('toggle', () => { state.diffOpen = details.open; });
+  return details;
+}
 
-  // -- Battery ------------------------------------------------------------
-  const batteryBox = el('fieldset', {}, el('legend', { text: 'Battery' }));
-  const toggle = el('input', { type: 'checkbox' });
-  toggle.checked = Boolean(scenario.battery);
-  toggle.addEventListener('change', () => {
-    if (toggle.checked) {
-      scenario.battery = {
-        nameplate_energy_kwh: 200, max_charge_kw: 100, max_discharge_kw: 100,
-        soc_min_pct: 10, soc_max_pct: 100, reserve_soc_pct: 25,
-        charge_efficiency_pct: 95, discharge_efficiency_pct: 95, self_discharge_pct_per_month: 1.5,
-      };
-      scenario.inverter.battery_power_kw = 100;
-      scenario.initial_soc_pct = 50;
-    } else {
-      scenario.battery = null;
-      scenario.inverter.battery_power_kw = 0;
-      scenario.initial_soc_pct = 0;
+// -- Editing -----------------------------------------------------------------
+
+/** A number box that refuses to turn a blank or unreadable entry into a number. */
+function numberField(obj, key, editKey, step = 'any') {
+  const input = el('input', { type: 'number', step, value: String(obj[key] ?? 0) });
+  input.addEventListener('input', () => {
+    const raw = input.value.trim();
+    if (raw === '' || !Number.isFinite(Number(raw))) {
+      input.setAttribute('aria-invalid', 'true');
+      input.title = 'Enter a number. A blank is not saved as 0.';
+      return;
     }
-    renderScenarios();
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('title');
+    recordEdit(editKey, 'edit a value', () => { obj[key] = Number(raw); });
   });
-  batteryBox.appendChild(el('label', { class: 'field-row', style: { marginBottom: '8px' } },
-    [toggle, el('span', { text: 'This scenario has a battery' })]));
+  return input;
+}
 
-  if (scenario.battery) {
-    const b = scenario.battery;
-    batteryBox.appendChild(el('div', { class: 'grid' }, [
+function textField(obj, key, editKey, afterEdit) {
+  const input = el('input', { type: 'text', value: String(obj[key] ?? '') });
+  input.addEventListener('input', () => {
+    recordEdit(editKey, 'edit a value', () => { obj[key] = input.value; if (afterEdit) afterEdit(input.value); });
+  });
+  return input;
+}
+
+function section(id, name, summary, body) {
+  const details = el('details', { class: 'section', open: state.openSections.has(id) ? 'open' : null }, [
+    el('summary', {}, [
+      el('span', { class: 'section-name', text: name }),
+      el('span', { class: 'section-summary', text: summary }),
+    ]),
+    el('div', { class: 'section-body' }, body),
+  ]);
+  details.addEventListener('toggle', () => {
+    if (details.open) state.openSections.add(id); else state.openSections.delete(id);
+  });
+  return details;
+}
+
+function scenarioEditor(scenario) {
+  const project = state.project;
+  const isBaseline = scenario.id === project.baseline_scenario_id;
+  const box = el('article', { class: 'stack' });
+  const prefix = `${scenario.id}.`;
+
+  const title = el('h3', { text: scenario.name });
+  const actions = el('div', { class: 'row' }, [
+    isBaseline ? el('span', { class: 'tag', text: 'Baseline' })
+      : el('button', { type: 'button', text: 'Make this the baseline', onclick: () => {
+        change('change the baseline', () => { project.baseline_scenario_id = scenario.id; });
+      } }),
+    el('button', { type: 'button', text: 'Duplicate', title: 'Ctrl+D', onclick: duplicateSelected }),
+    project.scenarios.length > 1 ? el('button', { type: 'button', class: 'danger', text: 'Remove', onclick: () => removeScenario(scenario) }) : null,
+  ]);
+  box.appendChild(el('div', { class: 'editor-head' }, [
+    el('div', {}, [title, isBaseline
+      ? el('p', { class: 'tiny muted', text: 'Every saving, delta, and NPV in this project is measured against this scenario.' })
+      : null]),
+    actions,
+  ]));
+
+  box.appendChild(el('div', { class: 'grid' }, [
+    field('Name', textField(scenario, 'name', `${prefix}name`, (value) => {
+      title.textContent = value;
+      const label = document.querySelector(`.feeder-name[data-scenario="${CSS.escape(scenario.id)}"]`);
+      if (label) label.textContent = value;
+    })),
+    field('Id, used in export file names', textField(scenario, 'id', `${prefix}id`, (value) => {
+      // The baseline is named by id. Keep the reference with it.
+      if (project.baseline_scenario_id === state.selected) project.baseline_scenario_id = value;
+      state.selected = value;
+    })),
+  ]));
+
+  box.appendChild(batterySection(scenario, prefix));
+  box.appendChild(dispatchSection(scenario, prefix));
+  box.appendChild(tariffSection(scenario, prefix));
+  box.appendChild(economicsSection(scenario, prefix));
+  box.appendChild(degradationSection(scenario, prefix));
+  box.appendChild(outageSection(scenario, prefix));
+  return box;
+}
+
+function batterySection(scenario, prefix) {
+  const b = scenario.battery;
+  const body = [];
+  const toggle = el('input', { type: 'checkbox' });
+  toggle.checked = Boolean(b);
+  toggle.addEventListener('change', () => {
+    change(toggle.checked ? 'add a battery' : 'remove the battery', () => {
+      if (toggle.checked) {
+        scenario.battery = {
+          nameplate_energy_kwh: 200, max_charge_kw: 100, max_discharge_kw: 100,
+          soc_min_pct: 10, soc_max_pct: 100, reserve_soc_pct: 25,
+          charge_efficiency_pct: 95, discharge_efficiency_pct: 95, self_discharge_pct_per_month: 1.5,
+        };
+        scenario.inverter.battery_power_kw = 100;
+        scenario.initial_soc_pct = 50;
+      } else {
+        scenario.battery = null;
+        scenario.inverter.battery_power_kw = 0;
+        scenario.initial_soc_pct = 0;
+        // The other policies need a battery, and the engine refuses them without one.
+        scenario.dispatch = { policy: 'self_consumption' };
+      }
+    });
+  });
+  body.push(el('label', { class: 'field-row' }, [toggle, el('span', { text: 'This scenario has a battery' })]));
+
+  if (b) {
+    const num = (obj, key) => numberField(obj, key, `${prefix}battery.${key}`);
+    body.push(el('div', { class: 'grid' }, [
       field('Nameplate energy (kWh)', num(b, 'nameplate_energy_kwh')),
       field('Max charge (kW, at the AC bus)', num(b, 'max_charge_kw')),
       field('Max discharge (kW, at the AC bus)', num(b, 'max_discharge_kw')),
@@ -674,117 +1937,266 @@ function scenarioEditor(scenario, index) {
       field('Initial state of charge (%)', num(scenario, 'initial_soc_pct')),
       field('Initial capacity (% of nameplate)', num(scenario, 'initial_capacity_pct')),
     ]));
-    batteryBox.appendChild(el('p', { class: 'tiny muted', text:
+    body.push(el('p', { class: 'tiny muted', text:
       `Round trip: ${(b.charge_efficiency_pct * b.discharge_efficiency_pct / 100).toFixed(1)} %. ` +
-      'All conversion loss lives in these two efficiencies; the inverter contributes a power ceiling ' +
-      'and no loss of its own, so the two are never double-counted.' }));
+      'The inverter adds a power ceiling and no further loss.' }));
+    body.push(deratingEditor(scenario, b, prefix));
   }
-  card.appendChild(batteryBox);
+  const summary = b
+    ? `${formatAxis(b.nameplate_energy_kwh)} kWh, ${formatAxis(b.max_discharge_kw)} kW, reserve ${b.reserve_soc_pct} %`
+    : 'None';
+  return section('battery', 'Battery', summary, body);
+}
 
-  // -- Dispatch -----------------------------------------------------------
-  const dispatchBox = el('fieldset', {}, el('legend', { text: 'Dispatch policy' }));
-  const policy = select(`policy-${index}`, [
-    ['self_consumption', 'Self-consumption'],
-    ['peak_limit', 'Peak limit'],
-    ['reserve_first', 'Reserve first'],
-    ['manual_schedule', 'Manual schedule'],
-  ], scenario.dispatch.policy);
-  policy.addEventListener('change', () => {
-    const chosen = policy.value;
-    if (chosen === 'self_consumption') scenario.dispatch = { policy: chosen };
-    else if (chosen === 'peak_limit') {
-      scenario.dispatch = { policy: chosen, import_limit_kw: 90, allow_grid_charge: false,
-                            grid_charge_target_soc_pct: scenario.battery?.soc_max_pct ?? 100 };
-    } else if (chosen === 'reserve_first') {
-      scenario.dispatch = { policy: chosen,
-                            reserve_target_soc_pct: scenario.battery?.reserve_soc_pct ?? 25,
-                            allow_grid_charge: false };
-    } else scenario.dispatch = { policy: chosen, entries: [] };
-    renderScenarios();
+/** The derating table the model uses. It was invisible before, and it changes results. */
+function deratingEditor(scenario, battery, prefix) {
+  const box = el('div', {});
+  const derate = battery.temperature_derate;
+  box.appendChild(el('h4', { text: 'Temperature derating' }));
+  if (!derate) {
+    box.appendChild(el('p', { class: 'tiny muted', text: 'None. The battery performs the same at every temperature.' }));
+    const hasTemperature = Boolean(state.project.dataset?.series?.temperature);
+    const add = el('button', { type: 'button', text: 'Add a derating table', onclick: () => {
+      change('add a derating table', () => {
+        battery.temperature_derate = { points: [
+          { temperature_c: 0, power_limit_pct: 100, usable_capacity_pct: 100 },
+          { temperature_c: 25, power_limit_pct: 100, usable_capacity_pct: 100 },
+        ] };
+      });
+    } });
+    add.disabled = !hasTemperature;
+    if (!hasTemperature) add.title = 'Import a temperature column first.';
+    box.appendChild(add);
+    return box;
+  }
+  const body = el('tbody');
+  derate.points.forEach((point, index) => {
+    const num = (key) => numberField(point, key, `${prefix}derate.${index}.${key}`);
+    body.appendChild(el('tr', { class: 'schedule' }, [
+      el('td', {}, num('temperature_c')),
+      el('td', {}, num('power_limit_pct')),
+      el('td', {}, num('usable_capacity_pct')),
+      el('td', {}, derate.points.length > 1 ? el('button', { type: 'button', class: 'quiet', text: 'Remove', onclick: () => {
+        change('remove a derating point', () => { derate.points.splice(index, 1); });
+      } }) : null),
+    ]));
   });
-  dispatchBox.appendChild(policy);
+  box.appendChild(el('div', { class: 'scroll' }, el('table', {}, [
+    el('thead', {}, el('tr', {}, [
+      el('th', { text: 'Ambient (°C)' }), el('th', { text: 'Power limit (%)' }),
+      el('th', { text: 'Usable capacity (%)' }), el('th', {}),
+    ])),
+    body,
+  ])));
+  box.appendChild(el('div', { class: 'row' }, [
+    el('button', { type: 'button', text: 'Add a point', onclick: () => {
+      change('add a derating point', () => {
+        const last = derate.points[derate.points.length - 1];
+        derate.points.push({ ...last, temperature_c: last.temperature_c + 10 });
+      });
+    } }),
+    el('button', { type: 'button', text: 'Remove derating', onclick: () => {
+      change('remove derating', () => { delete battery.temperature_derate; });
+    } }),
+  ]));
+  box.appendChild(el('p', { class: 'tiny muted', text: 'Points must rise in temperature. Values between points are interpolated linearly.' }));
+  return box;
+}
+
+function suggestedCeiling() {
+  const peak = state.profile?.peak_net_load_kw;
+  return peak ? niceNumber(peak * 0.85) : 90;
+}
+
+function dispatchSection(scenario, prefix) {
+  const body = [];
+  const options = scenario.battery
+    ? Object.entries(POLICY_NAMES)
+    : [['self_consumption', POLICY_NAMES.self_consumption]];
+  const policy = select(`policy-${scenario.id}`, options, scenario.dispatch.policy);
+  policy.addEventListener('change', () => {
+    change('change the dispatch policy', () => {
+      const chosen = policy.value;
+      if (chosen === 'self_consumption') scenario.dispatch = { policy: chosen };
+      else if (chosen === 'peak_limit') {
+        scenario.dispatch = { policy: chosen, import_limit_kw: suggestedCeiling(), allow_grid_charge: false,
+                              grid_charge_target_soc_pct: scenario.battery?.soc_max_pct ?? 100 };
+      } else if (chosen === 'reserve_first') {
+        scenario.dispatch = { policy: chosen,
+                              reserve_target_soc_pct: scenario.battery?.reserve_soc_pct ?? 25,
+                              allow_grid_charge: false };
+      } else scenario.dispatch = { policy: chosen, entries: [] };
+    });
+  });
+  body.push(el('div', { class: 'row' }, policy));
+  if (!scenario.battery) {
+    body.push(el('p', { class: 'tiny muted', text: 'The other policies need a battery.' }));
+  }
 
   const d = scenario.dispatch;
   const explain = {
     self_consumption: 'Stores surplus generation and discharges to cover net load. Never charges from ' +
       'the grid; never exports from the battery.',
     peak_limit: 'Discharges only as much as it takes to hold grid import at or below the ceiling, and ' +
-      'charges from surplus generation. It does not otherwise self-consume — holding the peak down is ' +
-      'the whole job.',
-    reserve_first: 'Below the target the battery only ever charges: refilling the outage reserve outranks ' +
-      'every saving. At or above it, it behaves as self-consumption and will not fall back below the target ' +
-      'while the grid is up.',
-    manual_schedule: 'Follows your setpoints exactly, and is idle outside them. Setpoints are clipped to ' +
-      'what the hardware can do, and any clipping is reported as a warning — the schedule you wrote is not ' +
-      'necessarily the schedule that ran.',
+      'charges from surplus generation.',
+    reserve_first: 'Below the target the battery only charges. At or above it, it behaves as self-consumption ' +
+      'and stays above the target while the grid is up.',
+    manual_schedule: 'Follows your setpoints, and is idle outside them. Setpoints are clipped to ' +
+      'what the hardware can do, and clipping is reported as a warning.',
   }[d.policy];
-  dispatchBox.appendChild(el('p', { class: 'tiny muted', style: { marginTop: '6px' }, text: explain }));
+  body.push(el('p', { class: 'tiny muted', text: explain }));
 
+  const num = (key) => numberField(d, key, `${prefix}dispatch.${key}`);
+  const allow = () => {
+    const input = el('input', { type: 'checkbox' });
+    input.checked = Boolean(d.allow_grid_charge);
+    input.addEventListener('change', () => {
+      recordEdit(`${prefix}dispatch.grid`, 'edit a value', () => { d.allow_grid_charge = input.checked; });
+    });
+    return el('label', { class: 'field-row' }, [input, el('span', { text: 'May charge from the grid' })]);
+  };
   if (d.policy === 'peak_limit') {
-    dispatchBox.appendChild(el('div', { class: 'grid' }, [
-      field('Import ceiling (kW)', num(d, 'import_limit_kw')),
-      field('Grid charge target (% state of charge)', num(d, 'grid_charge_target_soc_pct')),
-      el('div', { class: 'field' }, check(d, 'allow_grid_charge', 'May charge from the grid')),
+    body.push(el('div', { class: 'grid' }, [
+      field('Import ceiling (kW)', num('import_limit_kw')),
+      field('Grid charge target (% state of charge)', num('grid_charge_target_soc_pct')),
+      el('div', { class: 'field' }, allow()),
     ]));
   } else if (d.policy === 'reserve_first') {
-    dispatchBox.appendChild(el('div', { class: 'grid' }, [
-      field('Reserve target (% state of charge)', num(d, 'reserve_target_soc_pct')),
-      el('div', { class: 'field' }, check(d, 'allow_grid_charge', 'May charge from the grid')),
+    body.push(el('div', { class: 'grid' }, [
+      field('Reserve target (% state of charge)', num('reserve_target_soc_pct')),
+      el('div', { class: 'field' }, allow()),
     ]));
   } else if (d.policy === 'manual_schedule') {
-    dispatchBox.appendChild(scheduleEditor(d, index));
+    body.push(scheduleEditor(d, prefix));
   }
-  card.appendChild(dispatchBox);
 
-  // -- Tariff -------------------------------------------------------------
+  const summary = POLICY_NAMES[d.policy] +
+    (d.policy === 'peak_limit' ? `, ceiling ${d.import_limit_kw} kW` : '') +
+    (d.policy === 'reserve_first' ? `, target ${d.reserve_target_soc_pct} %` : '');
+  return section('dispatch', 'Dispatch policy', summary, body);
+}
+
+/** Copy one part of this scenario onto every other, so a comparison stays like for like. */
+function applyToAll(label, copy) {
+  return el('button', { type: 'button', class: 'quiet', text: `Use this ${label} in every scenario`, onclick: () => {
+    change(`use this ${label} in every scenario`, () => {
+      const source = selectedScenario();
+      for (const other of state.project.scenarios) {
+        if (other !== source) copy(source, other);
+      }
+    });
+    toast(`Every scenario now has this ${label}.`, null, true, { label: 'Undo', run: undo });
+  } });
+}
+
+function tariffSection(scenario, prefix) {
   const t = scenario.tariff;
-  const tariffBox = el('fieldset', {}, el('legend', { text: 'Tariff' }));
-  const importSource = select(`imp-src-${index}`, [
+  const body = [];
+  const dataset = state.project.dataset;
+  const hasPrices = Boolean(dataset?.series?.import_price && dataset?.series?.export_price);
+  const periods = dataset?.demand_periods?.labels ?? ['all'];
+
+  body.push(el('div', { class: 'row' }, [
+    ...TARIFF_PRESETS.map((preset) => {
+      const button = el('button', { type: 'button', text: preset.name, onclick: () => {
+        change(`apply the "${preset.name}" tariff`, () => preset.apply(t, periods));
+      } });
+      if (preset.needsSeries && !hasPrices) {
+        button.disabled = true;
+        button.title = 'Import price columns first.';
+      }
+      return button;
+    }),
+  ]));
+  body.push(el('p', { class: 'tiny muted', text: 'Presets use round example rates.' }));
+
+  const importSource = select(`imp-src-${scenario.id}`, [
     ['series', 'Per-interval price from the imported data'],
     ['flat', 'One flat price'],
   ], t.import.source);
   importSource.addEventListener('change', () => {
-    t.import = importSource.value === 'flat' ? { source: 'flat', price_per_kwh_usd: 0.15 } : { source: 'series' };
-    renderScenarios();
+    change('change the import price source', () => {
+      t.import = importSource.value === 'flat' ? { source: 'flat', price_per_kwh_usd: 0.15 } : { source: 'series' };
+    });
   });
-  const exportSource = select(`exp-src-${index}`, [
+  const exportSource = select(`exp-src-${scenario.id}`, [
     ['series', 'Per-interval credit from the imported data'],
     ['flat', 'One flat credit'],
   ], t.export.source);
   exportSource.addEventListener('change', () => {
-    t.export = exportSource.value === 'flat' ? { source: 'flat', price_per_kwh_usd: 0.05 } : { source: 'series' };
-    renderScenarios();
+    change('change the export credit source', () => {
+      t.export = exportSource.value === 'flat' ? { source: 'flat', price_per_kwh_usd: 0.05 } : { source: 'series' };
+    });
   });
+  const num = (obj, key) => numberField(obj, key, `${prefix}tariff.${key}`);
 
-  const tariffFields = [
+  body.push(el('div', { class: 'grid' }, [
     field('Import price source', importSource),
     t.import.source === 'flat' ? field('Import price (USD/kWh)', num(t.import, 'price_per_kwh_usd')) : null,
     field('Export credit source', exportSource),
-    t.export.source === 'flat' ? field('Export credit (USD/kWh)', num(t.export, 'price_per_kwh_usd')) : null,
+    t.export.source === 'flat' ? field('Export credit (USD/kWh)', numberField(t.export, 'price_per_kwh_usd', `${prefix}tariff.export`)) : null,
     field('Import price multiplier (x)', num(t, 'import_price_multiplier')),
     field('Export credit multiplier (x)', num(t, 'export_price_multiplier')),
     field('Fixed charge (USD per month)', num(t, 'fixed_charge_usd_per_month')),
-    field('Site export limit (kW, blank = unlimited)', exportLimit(scenario)),
-  ].filter(Boolean);
-  tariffBox.appendChild(el('div', { class: 'grid' }, tariffFields));
+    field('Site export limit (kW, blank = unlimited)', exportLimit(scenario, prefix)),
+  ].filter(Boolean)));
 
   const demand = t.demand_prices_per_kw_month_usd || {};
-  const periods = state.project.dataset?.demand_periods?.labels ?? ['all'];
-  tariffBox.appendChild(el('h4', { text: 'Demand charge (USD per kW of monthly peak)' }));
-  tariffBox.appendChild(el('div', { class: 'grid' }, periods.map((period) => {
+  body.push(el('h4', { text: 'Demand charge (USD per kW of monthly peak)' }));
+  body.push(el('div', { class: 'grid' }, periods.map((period) => {
     const input = el('input', { type: 'number', step: 'any', value: String(demand[period] ?? 0) });
-    input.addEventListener('input', (e) => {
-      t.demand_prices_per_kw_month_usd = t.demand_prices_per_kw_month_usd || {};
-      t.demand_prices_per_kw_month_usd[period] = Number(e.target.value);
+    input.addEventListener('input', () => {
+      if (input.value.trim() === '') { input.setAttribute('aria-invalid', 'true'); return; }
+      input.removeAttribute('aria-invalid');
+      recordEdit(`${prefix}demand.${period}`, 'edit a value', () => {
+        const prices = t.demand_prices_per_kw_month_usd || {};
+        // A price shown as 0 must be a price of 0: the engine refuses a tariff that
+        // prices one period and leaves another out.
+        for (const label of periods) prices[label] = prices[label] ?? 0;
+        prices[period] = Number(input.value);
+        t.demand_prices_per_kw_month_usd = prices;
+      });
     });
     return field(`${period} (USD/kW-month)`, input);
   })));
-  card.appendChild(tariffBox);
+  body.push(el('div', { class: 'row' }, applyToAll('tariff', (from, to) => {
+    to.tariff = structuredClone(from.tariff);
+  })));
 
-  // -- Economics ----------------------------------------------------------
+  const summary = [
+    t.import.source === 'flat' ? `${t.import.price_per_kwh_usd} USD/kWh flat` : 'Prices from data',
+    Object.keys(demand).length ? 'demand charge' : 'no demand charge',
+  ].join(', ');
+  return section('tariff', 'Tariff', summary, body);
+}
+
+function exportLimit(scenario, prefix) {
+  const input = el('input', {
+    type: 'number', step: 'any',
+    value: scenario.inverter.site_export_limit_kw === null || scenario.inverter.site_export_limit_kw === undefined
+      ? '' : String(scenario.inverter.site_export_limit_kw),
+  });
+  input.addEventListener('input', () => {
+    // `1e` reaches this as a blank value, and only badInput tells it from a real blank.
+    const reading = readOptionalNumber(input.value, input.validity.badInput);
+    if (!reading.ok) {
+      input.setAttribute('aria-invalid', 'true');
+      input.title = 'Enter a number, or leave it blank for no limit.';
+      return;
+    }
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('title');
+    recordEdit(`${prefix}export-limit`, 'edit a value', () => {
+      scenario.inverter.site_export_limit_kw = reading.value;
+    });
+  });
+  return input;
+}
+
+function economicsSection(scenario, prefix) {
   const k = scenario.economics;
-  const economicsBox = el('fieldset', {}, [
-    el('legend', { text: 'Economics' }),
+  const num = (obj, key, step) => numberField(obj, key, `${prefix}economics.${key}`, step);
+  const body = [
     el('div', { class: 'grid' }, [
       field('Installed cost (USD)', num(k, 'capex_usd')),
       field('Operating cost (USD per year)', num(k, 'annual_opex_usd')),
@@ -792,117 +2204,468 @@ function scenarioEditor(scenario, index) {
       field('Discount rate (% per year)', num(k, 'discount_rate_pct_per_year')),
       field('Energy escalation (% per year)', num(k, 'energy_price_escalation_pct_per_year')),
     ]),
-  ]);
-  card.appendChild(economicsBox);
+  ];
 
-  // -- Degradation --------------------------------------------------------
+  const replacing = el('input', { type: 'checkbox' });
+  replacing.checked = Boolean(k.replacement);
+  replacing.addEventListener('change', () => {
+    change(replacing.checked ? 'add a replacement' : 'remove the replacement', () => {
+      k.replacement = replacing.checked ? { cost_usd: Math.round(k.capex_usd * 0.5), trigger_capacity_pct: 70 } : null;
+    });
+  });
+  body.push(el('label', { class: 'field-row' }, [replacing, el('span', { text: 'Replace the battery when it fades' })]));
+  if (k.replacement) {
+    body.push(el('div', { class: 'grid' }, [
+      field('Replacement cost (USD)', numberField(k.replacement, 'cost_usd', `${prefix}replacement.cost`)),
+      field('Replace at capacity (% of nameplate)', numberField(k.replacement, 'trigger_capacity_pct', `${prefix}replacement.trigger`)),
+    ]));
+  }
+  body.push(el('div', { class: 'row' }, applyToAll('horizon, discount rate, and escalation', (from, to) => {
+    to.economics.horizon_years = from.economics.horizon_years;
+    to.economics.discount_rate_pct_per_year = from.economics.discount_rate_pct_per_year;
+    to.economics.energy_price_escalation_pct_per_year = from.economics.energy_price_escalation_pct_per_year;
+  })));
+  const summary = `${fmt.usd(k.capex_usd)} installed, ${k.horizon_years} years at ${k.discount_rate_pct_per_year} %`;
+  return section('economics', 'Economics', summary, body);
+}
+
+function degradationSection(scenario, prefix) {
   const g = scenario.degradation;
-  const degradationBox = el('fieldset', {}, [
-    el('legend', { text: 'Degradation — a transparent approximation, not a lifetime model' }),
-    el('div', { class: 'grid' }, [
-      field('Calendar fade (% per year)', num(g, 'calendar_fade_pct_per_year')),
-      field('Cycle fade (% per equivalent full cycle)', num(g, 'cycle_fade_pct_per_cycle')),
-      field('Throughput cost (USD per kWh discharged)', num(g, 'throughput_cost_per_kwh_throughput_usd')),
-    ]),
-    el('p', { class: 'tiny muted', text:
-      'A linear fade in two terms. It knows nothing about depth of discharge, C-rate, or thermal ' +
-      'history. Where a vendor gives a warranted capacity curve, use that instead.' }),
-  ]);
-  card.appendChild(degradationBox);
-
-  card.appendChild(outageEditor(scenario, index));
-  return card;
+  const num = (key) => numberField(g, key, `${prefix}degradation.${key}`);
+  const scaling = select(`scaling-${scenario.id}`, [
+    ['proportional_to_usable_capacity', 'In proportion to usable capacity'],
+    ['constant', 'Constant: year one\'s benefit every year'],
+  ], g.benefit_scaling);
+  scaling.addEventListener('change', () => {
+    recordEdit(`${prefix}degradation.scaling`, 'edit a value', () => { g.benefit_scaling = scaling.value; });
+  });
+  return section('degradation', 'Degradation',
+    `${g.calendar_fade_pct_per_year} %/year calendar, ${g.cycle_fade_pct_per_cycle} %/cycle`, [
+      el('p', { class: 'tiny muted', text:
+        'A yearly fade in two terms, each year taken from what is left. Depth of discharge, C-rate and ' +
+        'temperature history aren\'t modelled.' }),
+      el('div', { class: 'grid' }, [
+        field('Calendar fade (% per year)', num('calendar_fade_pct_per_year')),
+        field('Cycle fade (% per equivalent full cycle)', num('cycle_fade_pct_per_cycle')),
+        field('Throughput cost (USD per kWh discharged)', num('throughput_cost_per_kwh_throughput_usd')),
+        field('Later years\' benefit', scaling),
+      ]),
+    ]);
 }
 
-function exportLimit(scenario) {
-  const input = el('input', {
-    type: 'number', step: 'any',
-    value: scenario.inverter.site_export_limit_kw === null || scenario.inverter.site_export_limit_kw === undefined
-      ? '' : String(scenario.inverter.site_export_limit_kw),
+/** An instant, edited in UTC, with the site's own clock beside it. */
+function utcField(entry, key, editKey) {
+  const readout = el('div', { class: 'tiny muted', text: entry[key] ? `${fmt.when(entry[key])} at the site` : '' });
+  const input = el('input', { type: 'datetime-local', value: (entry[key] || '').slice(0, 16) });
+  input.addEventListener('input', () => {
+    if (!input.value) return;
+    recordEdit(editKey, 'edit a time', () => {
+      entry[key] = new Date(`${input.value}Z`).toISOString();
+      readout.textContent = `${fmt.when(entry[key])} at the site`;
+    });
   });
-  input.addEventListener('input', (event) => {
-    const raw = event.target.value.trim();
-    scenario.inverter.site_export_limit_kw = raw === '' ? null : Number(raw);
-  });
-  return input;
+  return el('div', {}, [input, readout]);
 }
 
-function scheduleEditor(dispatch, index) {
+function scheduleEditor(dispatch, prefix) {
   const box = el('div', {});
-  dispatch.entries = dispatch.entries || [];
-  const table = el('table');
-  table.appendChild(el('thead', {}, el('tr', {}, [
-    el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }),
-    el('th', { text: 'Battery power (kW, + discharges)' }), el('th', {}),
-  ])));
   const body = el('tbody');
-  dispatch.entries.forEach((entry, i) => {
-    const from = el('input', { type: 'datetime-local', value: (entry.start_utc || '').slice(0, 16) });
-    from.addEventListener('input', (e) => { entry.start_utc = new Date(`${e.target.value}Z`).toISOString(); });
-    const to = el('input', { type: 'datetime-local', value: (entry.end_utc || '').slice(0, 16) });
-    to.addEventListener('input', (e) => { entry.end_utc = new Date(`${e.target.value}Z`).toISOString(); });
-    const kw = el('input', { type: 'number', step: 'any', value: String(entry.battery_power_kw ?? 0) });
-    kw.addEventListener('input', (e) => { entry.battery_power_kw = Number(e.target.value); });
-    const drop = el('button', { class: 'danger', type: 'button', text: 'Remove' });
-    drop.addEventListener('click', () => { dispatch.entries.splice(i, 1); renderScenarios(); });
-    body.appendChild(el('tr', {}, [el('td', {}, from), el('td', {}, to), el('td', {}, kw), el('td', {}, drop)]));
+  (dispatch.entries ?? []).forEach((entry, i) => {
+    body.appendChild(el('tr', { class: 'schedule' }, [
+      el('td', {}, utcField(entry, 'start_utc', `${prefix}schedule.${i}.start`)),
+      el('td', {}, utcField(entry, 'end_utc', `${prefix}schedule.${i}.end`)),
+      el('td', {}, numberField(entry, 'battery_power_kw', `${prefix}schedule.${i}.kw`)),
+      el('td', {}, el('button', { type: 'button', class: 'quiet', text: 'Remove', onclick: () => {
+        change('remove a setpoint window', () => { dispatch.entries.splice(i, 1); });
+      } })),
+    ]));
   });
-  table.appendChild(body);
-  box.appendChild(el('div', { class: 'scroll' }, table));
-
-  const add = el('button', { type: 'button', text: '+ Add setpoint window' });
-  add.addEventListener('click', () => {
-    const start = state.project.dataset?.start_utc || new Date().toISOString();
-    dispatch.entries.push({ start_utc: start, end_utc: start, battery_power_kw: 0 });
-    renderScenarios();
-  });
-  box.appendChild(el('div', { class: 'row', style: { marginTop: '8px' } }, add));
+  if (dispatch.entries?.length) {
+    box.appendChild(el('div', { class: 'scroll' }, el('table', {}, [
+      el('thead', {}, el('tr', {}, [
+        el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }),
+        el('th', { text: 'Battery power (kW, + discharges)' }), el('th', {}),
+      ])),
+      body,
+    ])));
+  }
+  box.appendChild(el('div', { class: 'row' }, el('button', { type: 'button', text: 'Add a setpoint window', onclick: () => {
+    change('add a setpoint window', () => {
+      const start = state.project.dataset?.start_utc || new Date().toISOString();
+      dispatch.entries = [...(dispatch.entries ?? []), { start_utc: start, end_utc: start, battery_power_kw: 0 }];
+    });
+  } })));
   box.appendChild(el('p', { class: 'tiny muted', text:
-    'Windows must start and end exactly on an interval boundary inside the imported data. Tonans will ' +
-    'not round a window to fit — that would be a silent repair.' }));
+    'Windows must start and end exactly on an interval boundary inside the imported data.' }));
   return box;
 }
 
-function outageEditor(scenario, index) {
-  const box = el('fieldset', {}, el('legend', { text: 'Outages to replay' }));
-  scenario.outage.windows = scenario.outage.windows || [];
-
-  const table = el('table');
-  table.appendChild(el('thead', {}, el('tr', {}, [
-    el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }), el('th', { text: 'Label' }), el('th', {}),
-  ])));
+function outageSection(scenario, prefix) {
+  // Drawing a form must not change what it draws: a list the server left out stays out,
+  // or a project just saved would read as unsaved as soon as the page redraws.
+  const windows = scenario.outage.windows ?? [];
   const body = el('tbody');
-  scenario.outage.windows.forEach((window, i) => {
-    const from = el('input', { type: 'datetime-local', value: (window.start_utc || '').slice(0, 16) });
-    from.addEventListener('input', (e) => { window.start_utc = new Date(`${e.target.value}Z`).toISOString(); });
-    const to = el('input', { type: 'datetime-local', value: (window.end_utc || '').slice(0, 16) });
-    to.addEventListener('input', (e) => { window.end_utc = new Date(`${e.target.value}Z`).toISOString(); });
-    const label = el('input', { type: 'text', value: window.label || '' });
-    label.addEventListener('input', (e) => { window.label = e.target.value; });
-    const drop = el('button', { class: 'danger', type: 'button', text: 'Remove' });
-    drop.addEventListener('click', () => { scenario.outage.windows.splice(i, 1); renderScenarios(); });
-    body.appendChild(el('tr', {}, [el('td', {}, from), el('td', {}, to), el('td', {}, label), el('td', {}, drop)]));
+  windows.forEach((window, i) => {
+    const label = textField(window, 'label', `${prefix}outage.${i}.label`);
+    body.appendChild(el('tr', { class: 'schedule' }, [
+      el('td', {}, utcField(window, 'start_utc', `${prefix}outage.${i}.start`)),
+      el('td', {}, utcField(window, 'end_utc', `${prefix}outage.${i}.end`)),
+      el('td', {}, label),
+      el('td', {}, el('button', { type: 'button', class: 'quiet', text: 'Remove', onclick: () => {
+        change('remove an outage window', () => { windows.splice(i, 1); });
+      } })),
+    ]));
   });
-  table.appendChild(body);
-  box.appendChild(el('div', { class: 'scroll' }, table));
+  return section('outage', 'Outages to replay',
+    windows.length ? `${windows.length} window${windows.length === 1 ? '' : 's'}` : 'None', [
+      windows.length ? el('div', { class: 'scroll' }, el('table', {}, [
+        el('thead', {}, el('tr', {}, [
+          el('th', { text: 'From (UTC)' }), el('th', { text: 'To (UTC)' }), el('th', { text: 'Label' }), el('th', {}),
+        ])),
+        body,
+      ])) : null,
+      el('div', { class: 'row' }, [
+        el('button', { type: 'button', text: 'Add an outage window', onclick: () => {
+          change('add an outage window', () => {
+            const start = state.project.dataset?.start_utc || new Date().toISOString();
+            scenario.outage.windows = [...windows, { start_utc: start, end_utc: start, label: '' }];
+          });
+        } }),
+        applyToAll('outage list', (from, to) => { to.outage = structuredClone(from.outage); }),
+      ]),
+      el('p', { class: 'tiny muted', text:
+        'During an outage, non-critical load is shed and the battery can discharge below its reserve floor ' +
+        'down to its minimum.' }),
+    ]);
+}
 
-  const add = el('button', { type: 'button', text: '+ Add outage window' });
-  add.addEventListener('click', () => {
-    const start = state.project.dataset?.start_utc || new Date().toISOString();
-    scenario.outage.windows.push({ start_utc: start, end_utc: start, label: '' });
-    renderScenarios();
+// -- Adding ------------------------------------------------------------------
+
+function uniqueId(base) {
+  const taken = new Set(state.project.scenarios.map((s) => s.id));
+  const slug = (base.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 44).replace(/^-+|-+$/g, '')) || 'scenario';
+  if (!taken.has(slug)) return slug;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${slug}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+function uniqueName(base) {
+  const taken = new Set(state.project.scenarios.map((s) => s.name));
+  const trimmed = base.slice(0, 56);
+  if (!taken.has(trimmed)) return trimmed;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${trimmed} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+function addCopy(source, name) {
+  const copy = structuredClone(source);
+  copy.name = uniqueName(name);
+  copy.id = uniqueId(copy.name);
+  return copy;
+}
+
+function duplicateSelected() {
+  const project = state.project;
+  if (project.scenarios.length >= state.session.limits.max_scenarios) {
+    toast(`A project holds up to ${state.session.limits.max_scenarios} scenarios.`, 'limit.scenarios');
+    return;
+  }
+  const source = selectedScenario();
+  change('duplicate a scenario', () => {
+    const copy = addCopy(source, `${source.name} copy`);
+    project.scenarios.splice(project.scenarios.indexOf(source) + 1, 0, copy);
+    state.selected = copy.id;
   });
-  box.appendChild(el('div', { class: 'row', style: { marginTop: '8px' } }, add));
-  box.appendChild(el('p', { class: 'tiny muted', text:
-    'During an outage Tonans assumes non-critical load is shed by a transfer switch, and lets the ' +
-    'battery discharge below its reserve floor down to its hard minimum — the reserve exists for exactly ' +
-    'this moment.' }));
-  return box;
+}
+
+function removeScenario(scenario) {
+  const project = state.project;
+  change(`remove ${scenario.name}`, () => {
+    const index = project.scenarios.indexOf(scenario);
+    project.scenarios.splice(index, 1);
+    if (project.baseline_scenario_id === scenario.id) project.baseline_scenario_id = project.scenarios[0].id;
+    state.selected = project.scenarios[Math.max(index - 1, 0)].id;
+  });
+  toast(`Removed ${scenario.name}.`, null, true, { label: 'Undo', run: undo });
+}
+
+/** Round a starting value to something a person would say out loud. */
+function niceNumber(value) {
+  if (!(value > 0)) return 0;
+  const unit = 10 ** (Math.floor(Math.log10(value)) - 1);
+  return Number((Math.round(value / unit / 5) * 5 * unit).toPrecision(6));
+}
+
+/** Installed cost per kWh from a scenario in this project, if one states it. */
+function costFromProject() {
+  for (const scenario of state.project.scenarios) {
+    if (scenario.battery && scenario.economics.capex_usd > 0) {
+      return {
+        rate: Math.round(scenario.economics.capex_usd / scenario.battery.nameplate_energy_kwh),
+        from: scenario.name,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Starting points, each built from this site's own data where it can be. None of them
+ * is a recommendation: every value lands in the form, and the dialog says where it came
+ * from. Tonans has no price data, so installed cost is always the user's to state.
+ */
+function scenarioTemplates() {
+  const profile = state.profile;
+  const peak = profile?.peak_net_load_kw ?? 100;
+  const criticalMean = profile?.critical_load?.mean_kw ?? (profile ? profile.load.mean_kw * 0.25 : 25);
+  const criticalPeak = profile?.critical_load?.peak_kw ?? criticalMean * 2;
+  const basis = profile ? `your data's net peak of ${fmt.kw(peak)}` : 'a placeholder, since there is no data yet';
+
+  const battery = (energy, power) => ({
+    nameplate_energy_kwh: energy, max_charge_kw: power, max_discharge_kw: power,
+    soc_min_pct: 10, soc_max_pct: 100, reserve_soc_pct: 25,
+    charge_efficiency_pct: 95, discharge_efficiency_pct: 95, self_discharge_pct_per_month: 1.5,
+  });
+
+  return [
+    {
+      id: 'ladder', name: 'Battery sizes',
+      blurb: 'Several sizes under one rule, to see where more storage stops helping.',
+      params: [
+        { key: 'power', label: 'Battery power (kW)', value: niceNumber(peak * 0.25), note: `A quarter of ${basis}.` },
+        { key: 'hours', label: 'Hours of storage, comma-separated', value: '1, 2, 4', text: true },
+      ],
+      build(values, base, costPerKwh) {
+        const hours = parseValues(values.hours);
+        if (!hours.ok || !hours.values.length) throw new Error('Enter the hours of storage as numbers, separated by commas.');
+        return hours.values.map((h) => {
+          const energy = values.power * h;
+          return { name: `${fmt.n(energy, 0)} kWh / ${fmt.n(values.power, 0)} kW, self-consumption`,
+                   battery: battery(energy, values.power), capex: energy * costPerKwh,
+                   dispatch: { policy: 'self_consumption' } };
+        });
+      },
+    },
+    {
+      id: 'peak', name: 'Peak shaving',
+      blurb: 'Holds grid import at a ceiling, to cut the demand charge.',
+      params: [
+        { key: 'ceiling', label: 'Import ceiling (kW)', value: niceNumber(peak * 0.85), note: `85 % of ${basis}.` },
+        { key: 'power', label: 'Battery power (kW)', value: niceNumber(peak * 0.25), note: `A quarter of ${basis}.` },
+        { key: 'hours', label: 'Hours of storage', value: 2 },
+      ],
+      build(values, base, costPerKwh) {
+        const energy = values.power * values.hours;
+        return [{ name: `${fmt.n(energy, 0)} kWh / ${fmt.n(values.power, 0)} kW, peak limit ${fmt.n(values.ceiling, 0)} kW`,
+                  battery: battery(energy, values.power), capex: energy * costPerKwh,
+                  dispatch: { policy: 'peak_limit', import_limit_kw: values.ceiling, allow_grid_charge: true, grid_charge_target_soc_pct: 90 } }];
+      },
+    },
+    {
+      id: 'backup', name: 'Backup first',
+      blurb: 'Keeps the battery full for outages before it saves any money.',
+      params: [
+        { key: 'hours', label: 'Hours of critical load to carry', value: 8 },
+        { key: 'critical', label: 'Critical load to carry (kW)', value: niceNumber(criticalMean),
+          note: profile?.critical_load ? 'Your data\'s mean critical load.' : 'A quarter of your mean load: no critical-load column was imported.' },
+        { key: 'power', label: 'Battery power (kW)', value: niceNumber(criticalPeak), note: 'Enough for the critical peak.' },
+        { key: 'target', label: 'Reserve target (% state of charge)', value: 80 },
+      ],
+      build(values, base, costPerKwh) {
+        // Usable window 10 to 100 % at 95 % discharge efficiency.
+        const energy = niceNumber((values.critical * values.hours) / (0.9 * 0.95));
+        return [{ name: `${fmt.n(energy, 0)} kWh / ${fmt.n(values.power, 0)} kW, backup first`,
+                  battery: { ...battery(energy, values.power), reserve_soc_pct: Math.min(values.target, 80) },
+                  capex: energy * costPerKwh,
+                  dispatch: { policy: 'reserve_first', reserve_target_soc_pct: values.target, allow_grid_charge: true } }];
+      },
+    },
+    {
+      id: 'solar', name: 'Store surplus generation',
+      blurb: 'Self-consumption at one size, to keep more of what the site generates.',
+      params: [
+        { key: 'power', label: 'Battery power (kW)', value: niceNumber((profile?.generation?.peak_kw ?? peak) * 0.25),
+          note: profile?.generation ? 'A quarter of your generation peak.' : 'No generation was imported, so this policy has little to store.' },
+        { key: 'hours', label: 'Hours of storage', value: 4 },
+      ],
+      build(values, base, costPerKwh) {
+        const energy = values.power * values.hours;
+        return [{ name: `${fmt.n(energy, 0)} kWh / ${fmt.n(values.power, 0)} kW, self-consumption`,
+                  battery: battery(energy, values.power), capex: energy * costPerKwh,
+                  dispatch: { policy: 'self_consumption' } }];
+      },
+    },
+    {
+      id: 'copy', name: 'Blank copy of the baseline',
+      blurb: 'The baseline\'s assumptions, to change one thing by hand.',
+      params: [],
+      noCost: true,
+      build() { return [{ name: 'New scenario', copyOnly: true }]; },
+    },
+  ];
+}
+
+function addScenario() {
+  const project = state.project;
+  if (project.scenarios.length >= state.session.limits.max_scenarios) {
+    toast(`A project holds up to ${state.session.limits.max_scenarios} scenarios.`, 'limit.scenarios');
+    return;
+  }
+  const templates = scenarioTemplates();
+  const known = costFromProject();
+  let current = templates[0];
+
+  openDialog((dialog, close) => {
+    const pane = el('div', { class: 'stack' });
+    const picks = el('div', { class: 'template-list' });
+    const failure = el('div', { class: 'banner critical hidden' });
+    const cost = el('input', { type: 'number', step: 'any', min: '0', value: known ? String(known.rate) : '', id: 'template-cost' });
+
+    let inputs = {};
+    const drawPane = () => {
+      clear(pane);
+      inputs = {};
+      pane.appendChild(el('h4', { text: current.name, style: { marginTop: '0' } }));
+      pane.appendChild(el('p', { class: 'lede', text: current.blurb }));
+      const fields = current.params.map((param) => {
+        const input = param.text
+          ? el('input', { type: 'text', value: param.value })
+          : el('input', { type: 'number', step: 'any', value: String(param.value) });
+        inputs[param.key] = { input, text: Boolean(param.text) };
+        return el('div', { class: 'field' }, [
+          el('label', { text: param.label }),
+          input,
+          param.note ? el('span', { class: 'field-note', text: param.note }) : null,
+        ]);
+      });
+      if (!current.noCost) {
+        fields.push(el('div', { class: 'field' }, [
+          el('label', { text: 'Installed cost (USD per kWh of nameplate)' }),
+          cost,
+          el('span', { class: 'field-note', text: known
+            ? `From ${known.from} in this project.`
+            : 'Enter your quote.' }),
+        ]));
+      }
+      if (fields.length) pane.appendChild(el('div', { class: 'grid' }, fields));
+      pane.appendChild(el('p', { class: 'tiny muted', text: current.noCost
+        ? 'Every assumption is copied from the baseline.'
+        : 'Tariff, economics, degradation and outages are copied from the baseline, including any replacement ' +
+          'cost, which doesn\'t move with size. Battery defaults: 95 % efficiency each way, a 10 to 100 % window, ' +
+          '1.5 % self-discharge a month, a 50 % starting charge.' }));
+      pane.appendChild(failure);
+    };
+
+    const drawPicks = () => {
+      clear(picks);
+      for (const template of templates) {
+        picks.appendChild(el('button', {
+          type: 'button',
+          class: 'template-pick',
+          'aria-current': template === current ? 'true' : 'false',
+          onclick: () => { current = template; failure.classList.add('hidden'); drawPicks(); drawPane(); },
+        }, [template.name, el('small', { text: template.blurb })]));
+      }
+    };
+
+    const add = () => {
+      const values = {};
+      try {
+        for (const [key, { input, text }] of Object.entries(inputs)) {
+          if (text) { values[key] = input.value; continue; }
+          const number = Number(input.value);
+          if (input.value.trim() === '' || !Number.isFinite(number) || number <= 0) {
+            throw new Error('Every value here must be a number above zero.');
+          }
+          values[key] = number;
+        }
+        let costPerKwh = 0;
+        if (!current.noCost) {
+          const raw = cost.value.trim();
+          if (raw === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0) {
+            throw new Error('Enter an installed cost per kWh.');
+          }
+          costPerKwh = Number(raw);
+        }
+        const base = project.scenarios.find((s) => s.id === project.baseline_scenario_id) ?? project.scenarios[0];
+        const builds = current.build(values, base, costPerKwh);
+        if (project.scenarios.length + builds.length > state.session.limits.max_scenarios) {
+          throw new Error(`That would take the project past ${state.session.limits.max_scenarios} scenarios.`);
+        }
+        change(`add ${current.name.toLowerCase()}`, () => {
+          let last = null;
+          for (const build of builds) {
+            const scenario = addCopy(base, build.name);
+            if (!build.copyOnly) {
+              scenario.battery = build.battery;
+              scenario.inverter = { ...scenario.inverter, battery_power_kw: build.battery.max_discharge_kw };
+              scenario.dispatch = build.dispatch;
+              scenario.initial_soc_pct = 50;
+              scenario.initial_capacity_pct = 100;
+              scenario.economics = { ...scenario.economics, capex_usd: build.capex };
+            }
+            project.scenarios.push(scenario);
+            last = scenario;
+          }
+          state.selected = last.id;
+        });
+        close(builds.length);
+      } catch (error) {
+        failure.textContent = error.message;
+        failure.classList.remove('hidden');
+      }
+    };
+
+    dialog.appendChild(el('h3', { text: 'Add a scenario' }));
+    dialog.appendChild(el('div', { class: 'template-layout' }, [picks, pane]));
+    dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+      el('button', { type: 'button', text: 'Cancel', onclick: () => close(null) }),
+      el('button', { type: 'button', class: 'primary', text: 'Add to project', onclick: add }),
+    ]));
+    drawPicks();
+    drawPane();
+  }).then((added) => {
+    if (!added) return;
+    show('scenarios');
+    toast(`Added ${added} scenario${added === 1 ? '' : 's'}.`, null, true,
+      { label: 'Undo', run: undo });
+  });
 }
 
 // ---------------------------------------------------------------------------
 // 3 — Results
 // ---------------------------------------------------------------------------
+
+async function runAll() {
+  if (!state.project?.dataset) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('run', stamp);
+    show('results');
+    return guard(() => request(projectPath('/run'), { method: 'POST', revision: stamp.revision }))
+      .finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    dropLate('run', stamp);
+  } else if (reply) {
+    const result = reply.body;
+    state.run = result.run;
+    state.runStamp = stamp;
+    state.resultsHash = result.results_hash;
+    state.timelines = Object.fromEntries(result.timelines.map((t) => [t.scenario_id, t]));
+    if (!result.run.scenarios.some((s) => s.scenario_id === state.detail)) {
+      state.detail = result.run.scenarios.find((s) => !s.comparison.is_baseline)?.scenario_id
+        ?? result.run.scenarios[0].scenario_id;
+    }
+  }
+  redrawAfterJob();
+}
 
 function renderResults() {
   const root = document.getElementById('view-results');
@@ -913,65 +2676,81 @@ function renderResults() {
     return;
   }
 
-  const bar = el('div', { class: 'card' });
-  bar.appendChild(el('h3', { text: 'Run' }));
-  const go = el('button', { class: 'primary', type: 'button', text: 'Run all scenarios' });
-  go.addEventListener('click', async () => {
-    go.disabled = true;
-    go.textContent = 'Running…';
-    const result = await guard(() => api(`/api/projects/${encodeURIComponent(state.project.name)}/run`, { method: 'POST' }));
-    go.disabled = false;
-    go.textContent = 'Run all scenarios';
-    if (!result) return;
-    state.run = result.run;
-    state.timelines = Object.fromEntries(result.timelines.map((t) => [t.scenario_id, t]));
-    renderResults();
-  });
-  bar.appendChild(el('div', { class: 'row' }, [
-    go,
-    el('span', { class: 'tiny muted', text:
-      'Every scenario is simulated over every interval. Identical inputs always produce identical ' +
-      'results — the model input hash below proves it.' }),
+  const go = el('button', { class: state.run ? '' : 'primary', type: 'button',
+                            text: state.busy ? BUSY_LABEL[state.busy.what] : (state.run ? 'Run again' : 'Run all scenarios'),
+                            onclick: runAll });
+  go.disabled = Boolean(state.busy);
+  root.appendChild(el('div', {}, [
+    el('h3', { text: 'Results' }),
+    el('div', { class: 'row' }, go),
+    busyNote(),
   ]));
-  root.appendChild(bar);
 
   if (!state.run) return;
   const run = state.run;
 
-  root.appendChild(el('div', { class: 'card' }, [
+  const notice = staleNotice('You have unsaved changes. These results are from the last saved assumptions. Running again saves first.');
+  if (notice) root.appendChild(notice);
+
+  root.appendChild(warningSection(run));
+  root.appendChild(comparisonSection(run));
+  root.appendChild(billSection(run));
+  root.appendChild(detailSection(run));
+  root.appendChild(provenanceSection(run));
+}
+
+function provenanceSection(run) {
+  return el('section', { class: 'stack' }, [
     el('h3', { text: 'Provenance' }),
     kv([
+      ['Results hash', state.resultsHash],
       ['Model input hash', run.model_input_hash],
       ['Project hash', run.project_hash],
       ['Generated', fmt.when(run.generated_utc)],
       ['Model version', run.model_version],
     ]),
-  ]));
-
-  const warnings = allWarnings(run);
-  if (warnings.length) {
-    root.appendChild(el('div', { class: 'card' }, [
-      el('h3', { text: `Warning ledger (${warnings.length})` }),
-      el('p', { class: 'muted', text: 'Most serious first. Nothing is filtered out for being inconvenient.' }),
-      ledger(warnings),
-    ]));
-  }
-
-  root.appendChild(comparisonCard(run));
-  for (const scenario of run.scenarios) root.appendChild(scenarioResult(run, scenario));
+  ]);
 }
 
-function allWarnings(run) {
-  const seen = new Set();
-  const out = [];
-  const rank = { critical: 0, caution: 1, info: 2 };
-  for (const w of [...(run.warnings || []), ...run.scenarios.flatMap((s) => s.warnings || [])]) {
-    if (seen.has(w.code)) continue;
-    seen.add(w.code);
-    out.push(w);
+/** Every distinct warning, most serious first, naming the scenarios each came from. */
+function collectWarnings(run) {
+  const found = new Map();
+  const add = (warning, who) => {
+    const key = `${warning.code}\u0000${warning.message}`;
+    if (!found.has(key)) found.set(key, { ...warning, who: [] });
+    if (who) found.get(key).who.push(who);
+  };
+  for (const warning of run.warnings || []) add(warning, null);
+  for (const scenario of run.scenarios) {
+    for (const warning of scenario.warnings || []) add(warning, scenario.scenario_name);
   }
-  out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.code.localeCompare(b.code));
-  return out;
+  const rank = { critical: 0, caution: 1, info: 2 };
+  return [...found.values()].sort((a, b) =>
+    rank[a.severity] - rank[b.severity] || a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
+}
+
+function warningSection(run) {
+  const warnings = collectWarnings(run);
+  const box = el('section', { class: 'stack' });
+  if (!warnings.length) {
+    box.appendChild(el('h3', { text: 'Warning ledger' }));
+    box.appendChild(el('p', { class: 'lede', text: 'No warnings.' }));
+    return box;
+  }
+  const serious = warnings.filter((w) => w.severity !== 'info');
+  const notes = warnings.filter((w) => w.severity === 'info');
+  box.appendChild(el('div', {}, [
+    el('h3', { text: `Warning ledger (${warnings.length})` }),
+    el('p', { class: 'lede', text: 'Most serious first.' }),
+  ]));
+  if (serious.length) box.appendChild(ledger(serious));
+  if (notes.length) {
+    box.appendChild(el('details', {}, [
+      el('summary', { text: `${notes.length} informational note${notes.length === 1 ? '' : 's'}` }),
+      ledger(notes),
+    ]));
+  }
+  return box;
 }
 
 function ledger(warnings) {
@@ -982,72 +2761,195 @@ function ledger(warnings) {
       el('span', { class: 'sev', text: `${icon[w.severity]} ${w.severity}` }),
       el('span', { class: 'code', text: w.code }),
       document.createTextNode(w.message),
+      w.who?.length ? el('span', { class: 'who', text: w.who.join(', ') }) : null,
     ]));
   }
   return list;
 }
 
-function comparisonCard(run) {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: 'Scenario comparison' }));
-  card.appendChild(el('p', { class: 'muted', text:
-    'A negative cost change is a saving. Everything is measured against the baseline.' }));
+/**
+ * The comparison, as bars inside a table: each measure is its own column on its own
+ * scale, with a tick at the baseline's value. Length is compared down a column only,
+ * never across, so no measure is drawn against another's axis. Values are printed, so
+ * nothing depends on reading a bar.
+ */
+function comparisonSection(run) {
+  const measure = (title, unit, read, format, role, delta) => ({ title, unit, read, format, role, delta });
+  const columns = [
+    measure('Grid cost', 'USD per year', (s) => s.economics.scenario_annual_grid_cost_usd, fmt.usd, 'import',
+      (s) => s.comparison.grid_cost_delta_usd * s.economics.annualization_multiplier),
+    measure('Peak import', 'kW', (s) => s.energy.peak_import_kw, fmt.kw, 'import', (s) => s.comparison.peak_import_delta_kw),
+    measure('Self-sufficiency', '% of load', (s) => s.energy.self_sufficiency_pct, fmt.pct, 'generation',
+      (s) => s.comparison.self_sufficiency_delta_pct),
+    measure('Unmet critical load', 'kWh in outages', (s) => s.energy.unmet_critical_kwh, fmt.kwh, 'unmet',
+      (s) => s.comparison.unmet_critical_delta_kwh),
+  ];
 
-  const table = el('table');
-  table.appendChild(el('thead', {}, el('tr', {}, [
-    'Scenario', 'Policy', 'Grid cost (annual)', 'Change', 'Peak import', 'Self-sufficiency',
-    'Unmet critical', 'NPV', 'Payback',
-  ].map((h) => el('th', { class: h === 'Scenario' || h === 'Policy' ? '' : 'num', text: h })))));
+  const baseline = run.scenarios.find((s) => s.comparison.is_baseline) ?? run.scenarios[0];
+  const head = el('tr', {}, [
+    el('th', { text: 'Scenario' }),
+    ...columns.map((c) => el('th', { class: 'num' }, [c.title, el('span', { class: 'lens-policy', text: c.unit })])),
+    el('th', { class: 'num' }, ['Net present value', el('span', { class: 'lens-policy', text: 'USD, against the baseline' })]),
+    el('th', { class: 'num' }, ['Payback', el('span', { class: 'lens-policy', text: 'simple' })]),
+    el('th', { class: 'num' }, ['Outages', el('span', { class: 'lens-policy', text: 'critical load carried' })]),
+  ]);
+
+  const npvValues = run.scenarios.filter(hasInvestment).map((s) => s.economics.npv_usd);
+  const npvExtent = Math.max(...npvValues.map(Math.abs), 1e-9);
 
   const body = el('tbody');
   for (const s of run.scenarios) {
-    const c = s.comparison;
-    const k = s.economics;
-    const delta = c.is_baseline ? null : c.grid_cost_delta_usd * k.annualization_multiplier;
-    body.appendChild(el('tr', { class: c.is_baseline ? 'is-baseline' : '' }, [
-      el('td', {}, [
-        el('span', { class: 'swatch', style: { background: paint('load') } }),
-        document.createTextNode(s.scenario_name),
-      ]),
-      el('td', { text: s.dispatch_policy }),
-      el('td', { class: 'num', text: fmt.usd(k.scenario_annual_grid_cost_usd) }),
-      el('td', { class: `num ${delta === null ? '' : delta < 0 ? 'good' : 'bad'}`,
-                 text: delta === null ? '—' : fmt.usd(delta) }),
-      el('td', { class: 'num', text: fmt.kw(s.energy.peak_import_kw) }),
-      el('td', { class: 'num', text: fmt.pct(s.energy.self_sufficiency_pct) }),
-      el('td', { class: `num ${s.energy.unmet_critical_kwh > 1e-9 ? 'bad' : ''}`,
-                 text: fmt.kwh(s.energy.unmet_critical_kwh) }),
-      el('td', { class: `num ${k.npv_usd >= 0 ? 'good' : 'bad'}`,
-                 text: s.scenario.battery || k.capex_usd > 0 ? fmt.usd(k.npv_usd) : '—' }),
-      el('td', { class: 'num', text: fmt.years(k.simple_payback_years) }),
+    const isBaseline = s.comparison.is_baseline;
+    const row = el('tr', {}, el('td', { class: 'lens-name' }, [
+      s.scenario_name,
+      isBaseline ? el('span', { class: 'tag', text: 'Baseline', style: { marginLeft: '6px' } }) : null,
+      el('span', { class: 'lens-policy', text: s.dispatch_policy }),
     ]));
+    for (const column of columns) {
+      const values = run.scenarios.map(column.read);
+      const high = Math.max(...values, 1e-9);
+      const value = column.read(s);
+      const track = el('div', { class: 'track' }, value > 1e-9 ? el('div', {
+        class: 'bar from-left',
+        style: { left: '0', width: `${(value / high) * 100}%`, background: paint(column.role) },
+      }) : null);
+      if (!isBaseline) {
+        track.appendChild(el('div', { class: 'tick', style: { left: `${(column.read(baseline) / high) * 100}%` } }));
+      }
+      const delta = isBaseline ? null : column.delta(s);
+      row.appendChild(el('td', { class: 'measure', title: `${column.title}: ${column.format(value)}` }, [
+        el('span', { class: 'lens-value', text: column.format(value) }),
+        track,
+        delta === null ? null : el('span', { class: 'lens-delta', text: fmt.signed(delta, column.format) }),
+      ]));
+    }
+
+    // NPV has a sign, and the sign is the whole question: a bar each way from zero.
+    const k = s.economics;
+    if (hasInvestment(s)) {
+      const share = (Math.abs(k.npv_usd) / npvExtent) * 50;
+      row.appendChild(el('td', { class: 'measure', title: `Net present value: ${fmt.usd(k.npv_usd)}` }, [
+        el('span', { class: 'lens-value', text: fmt.usd(k.npv_usd) }),
+        el('div', { class: 'track' }, [
+          el('div', { class: `bar ${k.npv_usd >= 0 ? 'from-left' : 'from-right'}`, style: k.npv_usd >= 0
+            ? { left: '50%', width: `${share}%`, background: css('--div-pos-2') }
+            : { left: `${50 - share}%`, width: `${share}%`, background: css('--div-neg-0') } }),
+          el('div', { class: 'zero', style: { left: '50%' } }),
+        ]),
+        el('span', { class: 'lens-delta', text: `${k.horizon_years} years at ${k.discount_rate_pct_per_year} %` }),
+      ]));
+    } else {
+      row.appendChild(el('td', { class: 'num', text: '—' }));
+    }
+
+    // "Never" is a claim about an investment, so a scenario without one has no payback.
+    row.appendChild(el('td', { class: 'num', text: !hasInvestment(s) ? '—'
+      : (k.simple_payback_years === null || k.simple_payback_years === undefined
+        ? noPaybackText(k.capex_usd, `Not in ${k.horizon_years} years`) : fmt.years(k.simple_payback_years)) }));
+
+    const outages = s.outages ?? [];
+    const survived = outages.filter((o) => o.survived).length;
+    row.appendChild(el('td', { class: 'num', text: !outages.length ? 'None modelled'
+      : (survived === outages.length ? `All ${outages.length} carried`
+        : `${outages.length - survived} of ${outages.length} lost`) }));
+    body.appendChild(row);
   }
-  table.appendChild(body);
-  card.appendChild(el('div', { class: 'scroll' }, table));
-  return card;
+
+  return el('section', { class: 'stack' }, [
+    el('div', {}, [
+      el('h3', { text: 'Compare scenarios' }),
+      el('p', { class: 'lede', text:
+        'Bars compare within a column. The tick marks the baseline\'s value. A negative change in cost is a saving.' }),
+    ]),
+    el('div', { class: 'scroll' }, el('table', { class: 'lens' }, [el('thead', {}, head), body])),
+  ]);
+}
+
+function hasInvestment(s) {
+  return !s.comparison.is_baseline && (Boolean(s.scenario.battery) || s.economics.capex_usd > 0);
+}
+
+function billSection(run) {
+  const parts = [
+    ['Energy imported', (s) => s.cost.import_energy_cost_usd],
+    ['Demand charge', (s) => s.cost.demand_charge_usd],
+    ['Fixed charge', (s) => s.cost.fixed_charge_usd],
+    ['Export credit', (s) => -s.cost.export_credit_usd],
+    ['Total', (s) => s.cost.total_grid_cost_usd],
+  ];
+  const baseline = run.scenarios.find((s) => s.comparison.is_baseline) ?? run.scenarios[0];
+  const months = baseline.cost.billed_month_count;
+
+  const head = el('tr', {}, [el('th', { text: 'Scenario' }), ...parts.map(([title]) => el('th', { class: 'num', text: title }))]);
+  const body = el('tbody');
+  for (const s of run.scenarios) {
+    const row = el('tr', {}, el('td', { class: 'lens-name', text: s.scenario_name }));
+    for (const [title, read] of parts) {
+      const value = read(s);
+      const difference = value - read(baseline);
+      row.appendChild(el('td', { class: 'measure', title: `${title}: ${fmt.usd(value)}` }, [
+        el('span', { class: 'lens-value', text: fmt.usd(value) }),
+        s.comparison.is_baseline ? null : el('span', { class: 'lens-delta', text: fmt.signed(difference, fmt.usd) }),
+      ]));
+    }
+    body.appendChild(row);
+  }
+  return el('section', { class: 'stack' }, [
+    el('div', {}, [
+      el('h3', { text: 'Where the bill goes' }),
+      el('p', { class: 'lede', text: `Over the ${months} billed month${months === 1 ? '' : 's'} in the data. Credit is shown as a negative cost.` }),
+    ]),
+    el('div', { class: 'scroll' }, el('table', { class: 'lens' }, [el('thead', {}, head), body])),
+  ]);
+}
+
+/** One scenario in full, chosen from the rest, so the page does not run to dozens of screens. */
+function detailSection(run) {
+  const chosen = run.scenarios.find((s) => s.scenario_id === state.detail) ?? run.scenarios[0];
+  const pick = (id) => { state.detail = id; renderResults(); };
+  const picker = run.scenarios.length <= 5
+    ? el('div', { class: 'segments' }, run.scenarios.map((s) => el('button', {
+      type: 'button',
+      'aria-pressed': s.scenario_id === chosen.scenario_id ? 'true' : 'false',
+      text: s.scenario_name,
+      onclick: () => pick(s.scenario_id),
+    })))
+    : (() => {
+      const node = select('detail-pick', run.scenarios.map((s) => [s.scenario_id, s.scenario_name]), chosen.scenario_id);
+      node.addEventListener('change', () => pick(node.value));
+      return node;
+    })();
+  return el('section', { class: 'stack' }, [
+    el('h3', { text: 'One scenario in detail' }),
+    picker,
+    scenarioResult(run, chosen),
+  ]);
 }
 
 function scenarioResult(run, s) {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: s.scenario_name }));
-  card.appendChild(el('p', { class: 'muted', text: `Dispatch: ${s.dispatch_policy}` }));
-
+  const card = el('div', { class: 'stack' });
   const e = s.energy;
   const k = s.economics;
   card.appendChild(el('div', { class: 'tiles' }, [
-    tile('Grid cost (annual)', fmt.usd(k.scenario_annual_grid_cost_usd), 'over the simulated year'),
+    tile('Grid cost (annual)', fmt.usd(k.scenario_annual_grid_cost_usd), annualNote(k.annualization_multiplier, e.duration_hours)),
     tile('Peak grid import', fmt.kw(e.peak_import_kw), 'sets the demand charge'),
-    tile('Self-sufficiency', fmt.pct(e.self_sufficiency_pct),
-      'of load met by onsite generation, directly or after storage'),
-    tile('Net present value', fmt.usd(k.npv_usd), `${k.horizon_years} years at ${k.discount_rate_pct_per_year}%`),
+    tile('Self-sufficiency', fmt.pct(e.self_sufficiency_pct), 'of load met by on-site generation, directly or after storage'),
+    hasInvestment(s)
+      ? tile('Net present value', fmt.usd(k.npv_usd), `${k.horizon_years} years at ${k.discount_rate_pct_per_year} %`)
+      : tile('Dispatch', s.dispatch_policy, 'the rule this scenario runs'),
   ]));
+
+  const timeline = state.timelines[s.scenario_id];
+  if (timeline?.peak_window) {
+    card.appendChild(el('h4', { text: 'What happened at the peak' }));
+    card.appendChild(peakChart(run, s, timeline.peak_window));
+  }
 
   card.appendChild(el('h4', { text: 'Energy flow' }));
   card.appendChild(energyFlow(e));
 
-  const timeline = state.timelines[s.scenario_id];
   if (timeline) {
-    card.appendChild(el('h4', { text: 'Timelines' }));
+    card.appendChild(el('h4', { text: 'The whole data set' }));
     card.appendChild(timelineCharts(timeline, Boolean(s.scenario.battery)));
   }
 
@@ -1056,30 +2958,32 @@ function scenarioResult(run, s) {
     card.appendChild(outageTable(s.outages));
   }
 
-  card.appendChild(el('h4', { text: 'Energy' }));
-  card.appendChild(kv([
-    ['Site load', fmt.kwh(e.load_kwh)],
-    ['Load served', fmt.kwh(e.served_load_kwh)],
-    ['Generation available', fmt.kwh(e.generation_available_kwh)],
-    ['Generation curtailed', fmt.kwh(e.curtailed_kwh)],
-    ['Grid import', fmt.kwh(e.grid_import_kwh)],
-    ['Grid export', fmt.kwh(e.grid_export_kwh)],
-    ['Battery charged', fmt.kwh(e.battery_charge_kwh)],
-    ['Battery discharged', fmt.kwh(e.battery_discharge_kwh)],
-    ['Conversion loss', fmt.kwh(e.conversion_loss_kwh)],
-    ['Standing loss', fmt.kwh(e.self_discharge_loss_kwh)],
-    ['Equivalent full cycles', fmt.n(e.equivalent_full_cycles, 1)],
-    ['Energy balance residual', `${e.energy_balance_residual_kwh.toExponential(2)} kWh`],
+  card.appendChild(el('details', {}, [
+    el('summary', { text: 'Energy balance' }),
+    kv([
+      ['Site load', fmt.kwh(e.load_kwh)],
+      ['Load served', fmt.kwh(e.served_load_kwh)],
+      ['Generation available', fmt.kwh(e.generation_available_kwh)],
+      ['Generation curtailed', fmt.kwh(e.curtailed_kwh)],
+      ['Grid import', fmt.kwh(e.grid_import_kwh)],
+      ['Grid export', fmt.kwh(e.grid_export_kwh)],
+      ['Battery charged', fmt.kwh(e.battery_charge_kwh)],
+      ['Battery discharged', fmt.kwh(e.battery_discharge_kwh)],
+      ['Conversion loss', fmt.kwh(e.conversion_loss_kwh)],
+      ['Standing loss', fmt.kwh(e.self_discharge_loss_kwh)],
+      ['Equivalent full cycles', fmt.n(e.equivalent_full_cycles, 1)],
+      ['Energy balance residual', `${e.energy_balance_residual_kwh.toExponential(2)} kWh`],
+    ]),
+    el('p', { class: 'tiny muted', text:
+      'Residual: generation used + import + discharge − load served − export − charge, over every interval.' }),
   ]));
-  card.appendChild(el('p', { class: 'tiny muted', text:
-    'The residual is the model checking itself: generation used, plus import, plus discharge, minus load ' +
-    'served, export, and charge, summed over every interval. It should be zero to within floating-point ' +
-    'rounding. If it is not, nothing above is trustworthy.' }));
 
   if (s.scenario.battery || k.capex_usd > 0) {
-    card.appendChild(el('h4', { text: 'Economics' }));
-    card.appendChild(cashFlowTable(k));
-    card.appendChild(el('p', { class: 'tiny muted', text: k.degradation_method }));
+    card.appendChild(el('details', {}, [
+      el('summary', { text: 'Cash flow, year by year' }),
+      cashFlowTable(k),
+      el('p', { class: 'tiny muted', text: k.degradation_method }),
+    ]));
   }
   return card;
 }
@@ -1119,7 +3023,9 @@ function energyFlow(e) {
   const stored = e.final_stored_energy_kwh - e.initial_stored_energy_kwh;
 
   const inputs = [
-    ['generation', 'Generation', e.generation_used_kwh],
+    // Available, not used: what was curtailed is on the other bar, so counting only what
+    // was used would leave the bars apart by exactly that, and the balance would not close.
+    ['generation', 'Generation', e.generation_available_kwh],
     ['import', 'Grid import', e.grid_import_kwh],
     ['discharge', 'Battery out', e.battery_discharge_kwh],
   ];
@@ -1136,27 +3042,34 @@ function energyFlow(e) {
   for (const [title, segments, total] of [['Energy in', inputs, totalIn], ['Energy out', outputs, totalOut]]) {
     box.appendChild(el('div', { class: 'flow-label' }, [
       el('span', { text: title }),
-      el('span', { text: fmt.kwh(total) }),
+      // Equal totals can differ in the last bit and round apart at a .5, which would read
+      // as a kWh going missing. The demo does exactly that.
+      el('span', { text: fmt.kwh(Math.abs(totalIn - totalOut) < 1e-6 ? scale : total) }),
     ]));
-    const bar = el('div', { class: 'flow-bar' });
-    for (const [role, label, value] of segments) {
-      if (value <= 0) continue;
-      const width = (value / scale) * 100;
+    const present = segments.filter(([, , value]) => value > 0);
+    const bar = el('div', { class: 'flow-bar', style: { width: `${(total / scale) * 100}%` } });
+    for (const [role, label, value] of present) {
+      const fill = paint(role);
       const seg = el('div', {
         class: 'flow-seg',
-        style: { flex: `0 0 ${width}%`, background: paint(role) },
-        title: `${label}: ${fmt.kwh(value)} (${((value / total) * 100).toFixed(1)}% of ${title.toLowerCase()})`,
+        style: { flex: `${value} 1 0`, background: fill, color: inkOn(fill) },
+        title: `${label}: ${fmt.kwh(value)} (${((value / total) * 100).toFixed(1)} % of ${title.toLowerCase()})`,
       });
-      if (width > 9) seg.textContent = label;
+      if (value / scale > 0.09) seg.textContent = label;
       bar.appendChild(seg);
     }
     box.appendChild(bar);
+    box.appendChild(el('div', { class: 'legend' }, present.map(([role, label, value]) => el('span', {}, [
+      el('span', { class: 'swatch', style: { background: paint(role) } }),
+      document.createTextNode(`${label} ${fmt.kwh(value)}`),
+    ]))));
   }
 
-  box.appendChild(el('p', { class: 'chart-note', text:
-    `Both bars are drawn to the same scale. Stored energy changed by ${fmt.kwh(stored)} and ` +
-    `${fmt.kwh(losses)} was lost in conversion and standing loss, which is why they are not identical. ` +
-    'This is an energy balance, not an AC power-flow study.' }));
+  const battery = e.battery_charge_kwh > 0 || e.battery_discharge_kwh > 0
+    ? ` Battery in and Battery out differ by the ${fmt.kwh(losses)} lost in conversion and standing loss, ` +
+      `and the ${fmt.kwh(stored)} change in stored energy.`
+    : '';
+  box.appendChild(el('p', { class: 'chart-note', text: `Both bars are drawn to the same scale.${battery}` }));
   return box;
 }
 
@@ -1170,7 +3083,7 @@ function outageTable(outages) {
     body.appendChild(el('tr', {}, [
       el('td', {}, [
         o.label ? el('strong', { text: o.label }) : null,
-        el('div', { class: 'tiny muted', text: `${fmt.when(o.start_utc)} → ${fmt.when(o.end_utc)}` }),
+        el('div', { class: 'tiny muted', text: `${fmt.when(o.start_utc)} to ${fmt.when(o.end_utc)}` }),
       ].filter(Boolean)),
       el('td', { class: 'num', text: `${o.duration_hours.toFixed(1)} h` }),
       el('td', { class: 'num', text: fmt.kwh(o.critical_load_kwh) }),
@@ -1190,14 +3103,15 @@ function outageTable(outages) {
 function cashFlowTable(k) {
   const table = el('table');
   table.appendChild(el('thead', {}, el('tr', {}, [
-    'Year', 'Usable capacity', 'Gross saving', 'Operating', 'Throughput', 'Replacement',
+    'Year', 'Usable capacity', 'Gross saving', 'Operating', 'Throughput', 'Installed cost', 'Replacement',
     'Net cash flow', 'Discounted', 'Cumulative',
   ].map((h) => el('th', { class: 'num', text: h })))));
   const body = el('tbody');
   body.appendChild(el('tr', {}, [
     el('td', { class: 'num', text: '0' }), el('td', { class: 'num', text: '—' }),
     el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: '—' }),
-    el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: fmt.usd(k.capex_usd) }),
+    el('td', { class: 'num', text: '—' }), el('td', { class: 'num', text: fmt.usd(-k.capex_usd) }),
+    el('td', { class: 'num', text: '—' }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
     el('td', { class: 'num bad', text: fmt.usd(-k.capex_usd) }),
@@ -1209,6 +3123,7 @@ function cashFlowTable(k) {
       el('td', { class: 'num', text: fmt.usd(y.gross_savings_usd) }),
       el('td', { class: 'num', text: fmt.usd(-y.opex_usd) }),
       el('td', { class: 'num', text: fmt.usd(-y.throughput_cost_usd) }),
+      el('td', { class: 'num', text: '—' }),
       el('td', { class: 'num', text: y.replacement_usd > 0 ? fmt.usd(-y.replacement_usd) : '—' }),
       el('td', { class: `num ${y.net_cash_flow_usd >= 0 ? 'good' : 'bad'}`, text: fmt.usd(y.net_cash_flow_usd) }),
       el('td', { class: 'num', text: fmt.usd(y.discounted_cash_flow_usd) }),
@@ -1220,38 +3135,46 @@ function cashFlowTable(k) {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas timelines
+// Canvas charts
 // ---------------------------------------------------------------------------
 
+/** Charts on screen, so dark mode can repaint them and a resize redraws each one once. */
+const liveCharts = new Set();
+
+function mountChart(canvas, draw) {
+  const chart = { canvas, draw, width: 0 };
+  liveCharts.add(chart);
+  const observer = new ResizeObserver(() => {
+    if (!canvas.isConnected) {
+      observer.disconnect();
+      liveCharts.delete(chart);
+      return;
+    }
+    if (canvas.clientWidth !== chart.width) {
+      chart.width = canvas.clientWidth;
+      draw();
+    }
+  });
+  observer.observe(canvas);
+}
+
+// Dark mode changes every colour; the canvas has to be repainted, since unlike SVG it
+// cannot reference a CSS custom property.
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  for (const chart of liveCharts) {
+    if (chart.canvas.isConnected) chart.draw(); else liveCharts.delete(chart);
+  }
+});
+
 /**
- * Four stacked panels sharing one time axis.
+ * Stacked panels sharing one time axis.
  *
  * State of charge gets its own panel rather than a second y-axis on the power
  * chart. A chart with two y-scales invites a reader to compare two quantities whose
  * relative height is an artefact of the scaling the author chose, and that is not a
  * comparison Tonans is willing to imply.
  */
-function timelineCharts(timeline, hasBattery) {
-  const panels = [
-    { title: 'Load and on-site generation', unit: 'kW', signed: false, series: [
-      { key: 'load_kw', role: 'load', label: 'Load' },
-      { key: 'generation_kw', role: 'generation', label: 'Generation' },
-    ] },
-    { title: 'Grid exchange — import above zero, export below', unit: 'kW', signed: true, series: [
-      { key: 'grid_import_kw', role: 'import', label: 'Import', sign: 1 },
-      { key: 'grid_export_kw', role: 'export', label: 'Export', sign: -1 },
-    ] },
-  ];
-  if (hasBattery) {
-    panels.push({ title: 'Battery power — discharge above zero, charge below', unit: 'kW', signed: true, series: [
-      { key: 'battery_discharge_kw', role: 'discharge', label: 'Discharge', sign: 1 },
-      { key: 'battery_charge_kw', role: 'charge', label: 'Charge', sign: -1 },
-    ] });
-    panels.push({ title: 'State of charge', unit: '%', signed: false, series: [
-      { key: 'soc_pct', role: 'soc', label: 'State of charge' },
-    ] });
-  }
-
+function chartBlock(timeline, panels, note, tickFormat) {
   const wrap = el('div', { class: 'chart-wrap' });
 
   const key = el('div', { class: 'legend' });
@@ -1267,25 +3190,78 @@ function timelineCharts(timeline, hasBattery) {
 
   const canvas = el('canvas');
   wrap.appendChild(canvas);
+  const crosshair = el('div', { class: 'crosshair hidden' });
+  wrap.appendChild(crosshair);
   const tip = el('div', { class: 'tooltip hidden' });
   wrap.appendChild(tip);
+  wrap.appendChild(el('p', { class: 'chart-note', text: note }));
 
-  wrap.appendChild(el('p', { class: 'chart-note', text: timeline.decimated
-    ? `${timeline.source_interval_count.toLocaleString()} intervals shown as ` +
-      `${timeline.bucket_start_utc.length.toLocaleString()} buckets. The shaded band is each bucket's ` +
-      'full range, so no peak is hidden. The exported timeseries CSV holds every interval.'
-    : `${timeline.source_interval_count.toLocaleString()} intervals, at full resolution.` }));
-
-  const draw = () => drawTimeline(canvas, tip, timeline, panels);
-  requestAnimationFrame(draw);
-  window.addEventListener('resize', draw);
-  // Dark mode changes every colour; the canvas has to be repainted, since unlike
-  // SVG it cannot reference a CSS custom property.
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+  mountChart(canvas, () => drawPanels(canvas, tip, crosshair, timeline, panels, tickFormat));
   return wrap;
 }
 
-function drawTimeline(canvas, tip, timeline, panels) {
+function timelineCharts(timeline, hasBattery) {
+  const panels = [
+    { title: 'Load and on-site generation', unit: 'kW', signed: false, series: [
+      { key: 'load_kw', role: 'load', label: 'Load' },
+      { key: 'generation_kw', role: 'generation', label: 'Generation' },
+    ] },
+    { title: 'Grid exchange: import above zero, export below', unit: 'kW', signed: true, series: [
+      { key: 'grid_import_kw', role: 'import', label: 'Import', sign: 1 },
+      { key: 'grid_export_kw', role: 'export', label: 'Export', sign: -1 },
+    ] },
+  ];
+  if (hasBattery) {
+    panels.push({ title: 'Battery power: discharge above zero, charge below', unit: 'kW', signed: true, series: [
+      { key: 'battery_discharge_kw', role: 'discharge', label: 'Discharge', sign: 1 },
+      { key: 'battery_charge_kw', role: 'charge', label: 'Charge', sign: -1 },
+    ] });
+    panels.push({ title: 'State of charge', unit: '%', signed: false, series: [
+      { key: 'soc_pct', role: 'soc', label: 'State of charge' },
+    ] });
+  }
+  const note = timeline.decimated
+    ? `${timeline.source_interval_count.toLocaleString()} intervals shown as ` +
+      `${timeline.bucket_start_utc.length.toLocaleString()} buckets. The shaded band is each bucket's full range.`
+    : `${timeline.source_interval_count.toLocaleString()} intervals, at full resolution.`;
+  return chartBlock(timeline, panels, `${note} Times are at the site.`, fmt.day);
+}
+
+/** The days around this scenario's highest import, interval by interval, against the baseline. */
+function peakChart(run, s, window) {
+  const flat = (values) => ({ min: values, max: values, mean: values });
+  const timeline = {
+    bucket_start_utc: window.start_utc,
+    outage: window.outage,
+    series: {
+      grid_import_kw: flat(window.grid_import_kw),
+      baseline_import_kw: flat(window.baseline_grid_import_kw),
+      soc_pct: flat(window.soc_pct),
+    },
+  };
+  const ceiling = s.scenario.dispatch.policy === 'peak_limit' ? s.scenario.dispatch.import_limit_kw : null;
+  const series = [{ key: 'grid_import_kw', role: 'import', label: 'This scenario' }];
+  if (!s.comparison.is_baseline) series.push({ key: 'baseline_import_kw', role: 'baseline', label: 'Baseline', dashed: true });
+  const panels = [{
+    title: 'Grid import',
+    unit: 'kW',
+    signed: false,
+    series,
+    reference: ceiling === null ? null : { value: ceiling, label: `Ceiling ${fmt.kw(ceiling)}` },
+  }];
+  if (s.scenario.battery) {
+    panels.push({ title: 'State of charge', unit: '%', signed: false, series: [
+      { key: 'soc_pct', role: 'soc', label: 'State of charge' },
+    ] });
+  }
+  const over = ceiling !== null && window.peak_kw > ceiling + 1e-6;
+  const note = `This scenario's peak is ${fmt.kw(window.peak_kw)}, at ${fmt.when(window.peak_utc)} at the site.` +
+    (over ? ' It is above the ceiling, so the battery could not hold it there: it reached its reserve floor or its power limit first.' : '') +
+    ' Every interval in this window is shown.';
+  return chartBlock(timeline, panels, note, fmt.dayHour);
+}
+
+function drawPanels(canvas, tip, crosshair, timeline, panels, tickFormat) {
   const dpr = window.devicePixelRatio || 1;
   const width = canvas.clientWidth || 800;
   const panelHeight = 110;
@@ -1308,12 +3284,11 @@ function drawTimeline(canvas, tip, timeline, panels) {
   if (!n) return;
 
   const ink = css('--ink');
-  const muted = css('--ink-muted');
+  const muted = css('--ink-secondary');
   const gridline = css('--gridline');
   const axis = css('--axis');
-  const font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
-
-  const geometry = [];
+  const font = '12px Barlow, system-ui, "Segoe UI", sans-serif';
+  const xs = (i) => marginLeft + (plotWidth * i) / Math.max(n - 1, 1);
 
   panels.forEach((panel, index) => {
     const top = marginTop + index * (panelHeight + gap);
@@ -1330,6 +3305,7 @@ function drawTimeline(canvas, tip, timeline, panels) {
         high = Math.max(high, data.min[i] * sign, data.max[i] * sign);
       }
     }
+    if (panel.reference) high = Math.max(high, panel.reference.value);
     if (!Number.isFinite(low) || !Number.isFinite(high)) { low = 0; high = 1; }
     if (panel.signed) {
       const extent = Math.max(Math.abs(low), Math.abs(high), 1e-6);
@@ -1339,7 +3315,6 @@ function drawTimeline(canvas, tip, timeline, panels) {
       if (high - low < 1e-9) high = low + 1;
     }
     const y = (value) => bottom - ((value - low) / (high - low)) * panelHeight;
-    geometry.push({ panel, top, bottom, y, low, high });
 
     ctx.font = font;
     ctx.fillStyle = ink;
@@ -1361,29 +3336,40 @@ function drawTimeline(canvas, tip, timeline, panels) {
     }
     ctx.fillStyle = muted;
     ctx.textAlign = 'right';
-    ctx.fillText(panel.unit, marginLeft - 6, top - 6);
+    ctx.fillText(panel.unit, marginLeft - 6, top - 9);
 
     // Outage shading, so a reader can see which part of the year is islanded.
     ctx.fillStyle = css('--c-unmet');
     ctx.globalAlpha = 0.10;
     for (let i = 0; i < n; i += 1) {
       if (!timeline.outage[i]) continue;
-      const x = marginLeft + (plotWidth * i) / Math.max(n - 1, 1);
-      ctx.fillRect(x, top, Math.max(plotWidth / n, 1.5), panelHeight);
+      ctx.fillRect(xs(i), top, Math.max(plotWidth / n, 1.5), panelHeight);
     }
     ctx.globalAlpha = 1;
+
+    if (panel.reference) {
+      const ry = Math.round(y(panel.reference.value)) + 0.5;
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(marginLeft, ry);
+      ctx.lineTo(marginLeft + plotWidth, ry);
+      ctx.stroke();
+      ctx.fillStyle = ink;
+      ctx.textAlign = 'right';
+      ctx.fillText(panel.reference.label, marginLeft + plotWidth, ry - 4);
+    }
 
     for (const s of panel.series) {
       const data = timeline.series[s.key];
       if (!data) continue;
       const sign = s.sign ?? 1;
       const colour = paint(s.role);
-      const xs = (i) => marginLeft + (plotWidth * i) / Math.max(n - 1, 1);
 
-      // The band: each bucket's full range. Collapses to a line when the data is not
+      // The band: each bucket's full range. Collapses to nothing when the data is not
       // decimated, which is exactly right.
       ctx.fillStyle = colour;
-      ctx.globalAlpha = 0.26;
+      ctx.globalAlpha = 0.18;
       ctx.beginPath();
       for (let i = 0; i < n; i += 1) ctx.lineTo(xs(i), y(Math.max(data.max[i] * sign, data.min[i] * sign)));
       for (let i = n - 1; i >= 0; i -= 1) ctx.lineTo(xs(i), y(Math.min(data.max[i] * sign, data.min[i] * sign)));
@@ -1392,14 +3378,16 @@ function drawTimeline(canvas, tip, timeline, panels) {
       ctx.globalAlpha = 1;
 
       ctx.strokeStyle = colour;
-      ctx.lineWidth = 1.6;
+      ctx.lineWidth = 2;
       ctx.lineJoin = 'round';
+      ctx.setLineDash(s.dashed ? [5, 4] : []);
       ctx.beginPath();
       for (let i = 0; i < n; i += 1) {
         const py = y(data.mean[i] * sign);
         if (i === 0) ctx.moveTo(xs(i), py); else ctx.lineTo(xs(i), py);
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     }
   });
 
@@ -1409,29 +3397,24 @@ function drawTimeline(canvas, tip, timeline, panels) {
   const ticks = 6;
   for (let t = 0; t < ticks; t += 1) {
     const i = Math.round((t * (n - 1)) / (ticks - 1));
-    const x = marginLeft + (plotWidth * i) / Math.max(n - 1, 1);
     ctx.textAlign = t === 0 ? 'left' : t === ticks - 1 ? 'right' : 'center';
-    const when = new Date(timeline.bucket_start_utc[i]);
-    ctx.fillText(when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      x, height - axisHeight + 14);
+    ctx.fillText(tickFormat(timeline.bucket_start_utc[i]), xs(i), height - axisHeight + 14);
   }
 
   canvas.onmousemove = (event) => {
     const rect = canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
-    if (x < marginLeft || x > marginLeft + plotWidth) { tip.classList.add('hidden'); return; }
+    if (x < marginLeft || x > marginLeft + plotWidth) {
+      tip.classList.add('hidden');
+      crosshair.classList.add('hidden');
+      return;
+    }
     const i = Math.round(((x - marginLeft) / plotWidth) * (n - 1));
 
     clear(tip);
-    tip.appendChild(el('div', { class: 't-time',
-      text: new Date(timeline.bucket_start_utc[i]).toLocaleString(undefined,
-        { dateStyle: 'medium', timeStyle: 'short' }) }));
-    if (timeline.outage[i]) {
-      tip.appendChild(el('div', { class: 't-row' }, [
-        el('span', { style: { color: css('--c-unmet'), fontWeight: '700' }, text: 'GRID DOWN' }),
-      ]));
-    }
-    for (const { panel } of geometry) {
+    tip.appendChild(el('div', { class: 't-time', text: fmt.when(timeline.bucket_start_utc[i]) }));
+    if (timeline.outage[i]) tip.appendChild(el('div', { class: 't-row bad', text: 'Grid down' }));
+    for (const panel of panels) {
       for (const s of panel.series) {
         const data = timeline.series[s.key];
         if (!data) continue;
@@ -1445,33 +3428,19 @@ function drawTimeline(canvas, tip, timeline, panels) {
       }
     }
     tip.classList.remove('hidden');
-    const left = Math.min(x + 14, rect.width - 190);
+    const left = canvas.offsetLeft + Math.min(x + 14, rect.width - 200);
     tip.style.left = `${Math.max(left, 6)}px`;
-    tip.style.top = `${Math.min(event.clientY - rect.top + 12, rect.height - 140)}px`;
+    tip.style.top = `${canvas.offsetTop + Math.min(event.clientY - rect.top + 12, rect.height - 140)}px`;
 
-    // Redraw plus a crosshair, so the tooltip is anchored to something visible.
-    drawCrosshair(canvas, ctx, x, marginTop, height - axisHeight, axis);
+    crosshair.classList.remove('hidden');
+    crosshair.style.left = `${canvas.offsetLeft + x}px`;
+    crosshair.style.top = `${canvas.offsetTop + marginTop}px`;
+    crosshair.style.height = `${height - axisHeight - marginTop}px`;
   };
   canvas.onmouseleave = () => {
     tip.classList.add('hidden');
-    drawTimeline(canvas, tip, timeline, panels);
+    crosshair.classList.add('hidden');
   };
-}
-
-let crosshairFrame = null;
-function drawCrosshair(canvas, ctx, x, top, bottom, colour) {
-  if (crosshairFrame) cancelAnimationFrame(crosshairFrame);
-  crosshairFrame = requestAnimationFrame(() => {
-    ctx.save();
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(Math.round(x) + 0.5, top);
-    ctx.lineTo(Math.round(x) + 0.5, bottom);
-    ctx.stroke();
-    ctx.restore();
-  });
 }
 
 function niceTicks(low, high, count) {
@@ -1499,31 +3468,70 @@ const PARAMS = [
   ['import_price_multiplier', 'Import price (x)'],
   ['demand_price_per_kw_month_usd', 'Demand price (USD/kW-month)'],
   ['calendar_fade_pct_per_year', 'Calendar fade (%/year)'],
-  ['capex_usd', 'CAPEX (USD)'],
+  ['capex_usd', 'Installed cost (USD)'],
   ['discount_rate_pct_per_year', 'Discount rate (%/year)'],
 ];
+const paramLabel = (param) => PARAMS.find(([id]) => id === param)?.[1] ?? param;
+
+/** What a metric is, what it reads like, and which way is better within the tested cells. */
+const METRICS = [
+  { id: 'npv', title: 'Net present value', unit: 'USD', read: (m) => m.npv_usd, scale: 'diverging', better: 'high', format: fmt.usd },
+  { id: 'savings', title: 'Annual saving', unit: 'USD', read: (m) => m.annual_savings_usd, scale: 'diverging', better: 'high', format: fmt.usd },
+  { id: 'cost', title: 'Annual grid cost', unit: 'USD', read: (m) => m.annual_grid_cost_usd, scale: 'sequential', better: 'low', format: fmt.usd },
+  { id: 'peak', title: 'Peak grid import', unit: 'kW', read: (m) => m.peak_import_kw, scale: 'sequential', better: 'low', format: fmt.kw },
+  { id: 'self', title: 'Self-sufficiency', unit: '%', read: (m) => m.self_sufficiency_pct, scale: 'sequential', better: 'high', format: fmt.pct },
+  { id: 'unmet', title: 'Unmet critical load', unit: 'kWh', read: (m) => m.unmet_critical_kwh, scale: 'sequential', better: 'low', format: fmt.kwh },
+  { id: 'payback', title: 'Simple payback', unit: 'years', read: (m) => m.simple_payback_years ?? null, scale: 'sequential', better: 'low', format: fmt.years },
+];
+
+function sensitivitySettings() {
+  state.sens = studySettings(state.sens, state.project.scenarios, state.project.baseline_scenario_id);
+  return state.sens;
+}
 
 function renderSensitivity() {
   const root = document.getElementById('view-sensitivity');
   clear(root);
+  if (!state.project.dataset) {
+    root.appendChild(el('div', { class: 'banner', text: 'Import interval data first.' }));
+    return;
+  }
+  const settings = sensitivitySettings();
+  if (!settings) {
+    root.appendChild(el('div', { class: 'banner', text: 'Add a scenario first.' }));
+    return;
+  }
+  const scenarioOf = () => state.project.scenarios.find((s) => s.id === settings.scenario);
 
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: 'Sensitivity' }));
-  card.appendChild(el('p', { class: 'muted', text:
-    `Every cell is a full simulation of the whole data set, not an interpolation — which is why the ` +
-    `grid is bounded at ${state.session.limits.max_sensitivity_cells} cells.` }));
+  const box = el('section', { class: 'stack' });
+  box.appendChild(el('div', {}, [
+    el('h3', { text: 'Sensitivity' }),
+    el('p', { class: 'lede', text: `Up to ${state.session.limits.max_sensitivity_cells} cells.` }),
+  ]));
 
-  const scenarioPick = select('sens-scenario',
-    state.project.scenarios.map((s) => [s.id, s.name]),
-    state.project.scenarios.find((s) => s.battery)?.id ?? state.project.scenarios[0].id);
+  const scenarioPick = select('sens-scenario', state.project.scenarios.map((s) => [s.id, s.name]), settings.scenario);
+  const axis1 = select('sens-p1', PARAMS, settings.p1);
+  const values1 = el('input', { type: 'text', id: 'sens-v1', value: settings.v1, placeholder: 'comma-separated values' });
+  const axis2 = select('sens-p2', [['', 'None: one axis only'], ...PARAMS], settings.p2);
+  const values2 = el('input', { type: 'text', id: 'sens-v2', value: settings.v2, placeholder: 'comma-separated values' });
+  values2.disabled = !settings.p2;
 
-  const axis1 = select('sens-p1', PARAMS, 'battery_energy_kwh');
-  const values1 = el('input', { type: 'text', id: 'sens-v1', value: '200, 400, 600, 800',
-    placeholder: 'comma-separated values' });
-  const axis2 = select('sens-p2', [['', 'None — one axis only'], ...PARAMS], 'battery_power_kw');
-  const values2 = el('input', { type: 'text', id: 'sens-v2', value: '50, 100, 150' });
+  scenarioPick.addEventListener('change', () => {
+    chooseStudyScenario(settings, scenarioPick.value);
+    renderSensitivity();
+  });
+  axis1.addEventListener('change', () => {
+    chooseStudyAxis(settings, 1, axis1.value);
+    renderSensitivity();
+  });
+  axis2.addEventListener('change', () => {
+    chooseStudyAxis(settings, 2, axis2.value);
+    renderSensitivity();
+  });
+  values1.addEventListener('input', () => { settings.v1 = values1.value; settings.v1Edited = true; });
+  values2.addEventListener('input', () => { settings.v2 = values2.value; settings.v2Edited = true; });
 
-  card.appendChild(el('div', { class: 'grid' }, [
+  box.appendChild(el('div', { class: 'grid' }, [
     field('Scenario to vary', scenarioPick),
     field('First axis', axis1),
     field('First axis values', values1),
@@ -1531,38 +3539,232 @@ function renderSensitivity() {
     field('Second axis values', values2),
   ]));
 
-  const go = el('button', { class: 'primary', type: 'button', text: 'Run sensitivity' });
-  go.addEventListener('click', async () => {
-    const parse = (input) => input.value.split(',').map((v) => Number(v.trim())).filter((v) => !Number.isNaN(v));
-    const axes = [{ param: axis1.value, values: parse(values1) }];
-    if (axis2.value) axes.push({ param: axis2.value, values: parse(values2) });
+  // Battery size and installed cost move together in the real world, and a study has to
+  // say what it did about that, or the "best" net present value is just the biggest box.
+  const energyAxis = settings.p1 === 'battery_energy_kwh' || settings.p2 === 'battery_energy_kwh';
+  const costAxis = settings.p1 === 'capex_usd' || settings.p2 === 'capex_usd';
+  const scaling = energyAxis && !costAxis;
+  if (scaling) {
+    const scale = el('input', { type: 'checkbox', id: 'sens-scale' });
+    scale.checked = settings.scale;
+    const rate = el('input', { type: 'number', step: 'any', min: '0', id: 'sens-rate', value: settings.rate });
+    rate.disabled = !settings.scale;
+    scale.addEventListener('change', () => { settings.scaleChoice = scale.checked; renderSensitivity(); });
+    // Typing a rate is a choice, and it stands until the cost or size it was about changes.
+    // It says so, because at any other rate the scenario's own cell will not match Results.
+    const own = settings.exactRate;
+    const differs = el('p', { class: 'tiny muted' });
+    const syncDiffers = () => {
+      const typed = settings.rateOverride !== null && own !== null && Number(settings.rate) !== own;
+      differs.classList.toggle('hidden', !typed);
+      differs.textContent = typed
+        ? `This scenario's own rate is ${own} USD per kWh. At the rate above, its own size will not match Results.`
+        : '';
+    };
+    syncDiffers();
+    rate.addEventListener('input', () => {
+      settings.rate = rate.value;
+      settings.rateOverride = rate.value;
+      syncDiffers();
+    });
+    box.appendChild(el('div', { class: 'stack' }, [
+      el('label', { class: 'field-row' }, [scale, el('span', { text: 'Move installed cost with battery energy' })]),
+      settings.scale
+        ? el('div', {}, [el('div', { class: 'grid' }, field('Installed cost (USD per kWh of nameplate)', rate)), differs])
+        : el('p', { class: 'tiny muted', text:
+          `Every cell keeps this scenario's installed cost of ${fmt.usd(scenarioOf().economics.capex_usd)}, ` +
+          'whatever the battery size.' }),
+    ]));
+  } else if (settings.p1 === 'battery_power_kw' || settings.p2 === 'battery_power_kw') {
+    box.appendChild(el('p', { class: 'tiny muted', text:
+      'Battery power does not change installed cost in this study.' }));
+  }
+  if (hasPriceAxis([{ param: settings.p1 }, { param: settings.p2 }])) {
+    box.appendChild(el('p', { class: 'tiny muted', text:
+      'A price axis sets the same price on the baseline and the candidate.' }));
+  }
 
-    go.disabled = true;
-    go.textContent = 'Running…';
-    const request = { scenario_id: scenarioPick.value, axes };
-    const study = await guard(() => api(`/api/projects/${encodeURIComponent(state.project.name)}/sensitivity`, {
-      method: 'POST',
-      body: request,
-    }));
-    go.disabled = false;
-    go.textContent = 'Run sensitivity';
-    if (!study) return;
-    state.study = study;
-    state.studyRequest = request;
-    renderSensitivity();
-  });
-  card.appendChild(el('div', { class: 'row', style: { marginTop: '10px' } }, go));
-  root.appendChild(card);
+  const go = el('button', { class: 'primary', type: 'button', text: state.busy ? BUSY_LABEL[state.busy.what] : 'Run sensitivity', onclick: () => runStudy() });
+  go.disabled = Boolean(state.busy);
+  const count = el('span', { class: 'tiny muted' });
+  const countCells = () => {
+    const cells = parseValues(settings.v1).values.length * (settings.p2 ? parseValues(settings.v2).values.length : 1);
+    count.textContent = `${cells} cell${cells === 1 ? '' : 's'}.`;
+  };
+  countCells();
+  values1.addEventListener('input', countCells);
+  values2.addEventListener('input', countCells);
+  box.appendChild(el('div', { class: 'row' }, [go, count]));
+  const waiting = busyNote();
+  if (waiting) box.appendChild(waiting);
+  const notice = staleNotice(state.study
+    ? 'You have unsaved changes. This study is from the last saved assumptions. Running it again saves first.'
+    : 'You have unsaved changes. Running a study saves them first.');
+  if (notice) root.appendChild(notice);
+  root.appendChild(box);
 
   if (!state.study) return;
-  const study = state.study;
-
-  root.appendChild(heatCard(study, 'Net present value', (m) => m.npv_usd, 'USD', 'diverging'));
-  root.appendChild(heatCard(study, 'Peak grid import', (m) => m.peak_import_kw, 'kW', 'sequential'));
-  root.appendChild(heatCard(study, 'Unmet critical load', (m) => m.unmet_critical_kwh, 'kWh', 'sequential'));
-  if (study.warnings?.length) {
-    root.appendChild(el('div', { class: 'card' }, [el('h3', { text: 'Warnings' }), ledger(study.warnings)]));
+  // A cell on a price axis is a price the site might face, not a design to pick, and copied
+  // into a scenario it would move that scenario's tariff and leave the baseline's behind.
+  if (!hasPriceAxis(state.study.axes)) root.appendChild(bestCells(state.study));
+  root.appendChild(heatSection(state.study));
+  if (state.study.warnings?.length) {
+    root.appendChild(el('section', { class: 'stack' }, [el('h3', { text: 'Warnings on this study' }), ledger(state.study.warnings)]));
   }
+}
+
+async function runStudy() {
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  const settings = sensitivitySettings();
+  if (!settings) return;
+  const first = parseValues(settings.v1);
+  const second = settings.p2 ? parseValues(settings.v2) : { ok: true, values: [] };
+  if (!first.ok || !second.ok) {
+    toast(`Not a number: ${[...(first.bad ?? []), ...(second.bad ?? [])].join(', ')}. Use comma-separated numbers.`, 'ui.bad_axis_values');
+    return;
+  }
+  const axes = [{ param: settings.p1, values: first.values }];
+  if (settings.p2) axes.push({ param: settings.p2, values: second.values });
+  const body = { scenario_id: settings.scenario, axes };
+
+  const energyAxis = settings.p1 === 'battery_energy_kwh' || settings.p2 === 'battery_energy_kwh';
+  const costAxis = settings.p1 === 'capex_usd' || settings.p2 === 'capex_usd';
+  if (energyAxis && !costAxis && settings.scale) {
+    const rate = Number(settings.rate);
+    if (settings.rate.trim() === '' || !Number.isFinite(rate) || rate < 0) {
+      toast('Enter the installed cost per kWh, or turn off moving it with battery energy.', 'ui.bad_cost_rate');
+      return;
+    }
+    body.capex_per_kwh_usd = rate;
+  }
+
+  if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('study', stamp);
+    renderSensitivity();
+    return guard(() => request(projectPath('/sensitivity'), { method: 'POST', body, revision: stamp.revision }))
+      .finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    dropLate('study', stamp);
+  } else if (reply) {
+    state.study = reply.body;
+    state.studyRequest = body;
+    state.bundle = null;
+  }
+  redrawAfterJob();
+}
+
+function describeCell(study, cell) {
+  return study.axes.map((axis, index) => `${paramLabel(axis.param)} ${formatAxis(cell.axis_values[index])}`).join(', ');
+}
+
+/** The cells at the best tested value of a metric. Empty if the metric never varies. */
+function bestOf(study, metric) {
+  const scored = study.cells
+    .map((cell) => ({ cell, value: metric.read(cell.metrics) }))
+    .filter(({ value }) => value !== null && value !== undefined);
+  if (!scored.length) return { value: null, cells: [], varies: false };
+  const values = scored.map(({ value }) => value);
+  const target = metric.better === 'high' ? Math.max(...values) : Math.min(...values);
+  const tolerance = Math.max(Math.abs(target) * 1e-9, 1e-9);
+  const cells = scored.filter(({ value }) => Math.abs(value - target) <= tolerance).map(({ cell }) => cell);
+  return { value: target, cells, varies: Math.max(...values) - Math.min(...values) > tolerance };
+}
+
+function bestCells(study) {
+  const count = study.cells.length;
+  const items = ['npv', 'peak', 'unmet'].map((id) => {
+    const metric = METRICS.find((m) => m.id === id);
+    const best = bestOf(study, metric);
+    const word = metric.better === 'high' ? 'Highest' : 'Lowest';
+    const where = !best.varies
+      ? `The same in every cell${best.value === null ? '' : `: ${metric.format(best.value)}`}.`
+      : best.cells.length > 1
+        ? `${best.cells.length} cells tie, first at ${describeCell(study, best.cells[0])}.`
+        : `At ${describeCell(study, best.cells[0])}.`;
+    return el('div', { class: 'best-item' }, [
+      el('div', { class: 'k', text: `${word} ${metric.title.toLowerCase()}` }),
+      el('div', { class: 'v', text: best.value === null ? '—' : metric.format(best.value) }),
+      el('div', { class: 'where', text: where }),
+      best.varies && best.cells.length ? el('button', { type: 'button', text: 'Add this cell as a scenario',
+        onclick: () => addCellAsScenario(study, best.cells[0]) }) : null,
+    ]);
+  });
+  const npv = bestOf(study, METRICS[0]);
+  return el('section', { class: 'stack' }, [
+    el('div', {}, [
+      el('h3', { text: `Best of the ${count} cell${count === 1 ? '' : 's'} you tested` }),
+      npv.value !== null && npv.value < 0
+        ? el('p', { class: 'lede', text: 'No tested cell has a positive net present value.' })
+        : null,
+    ]),
+    el('div', { class: 'best' }, items),
+  ]);
+}
+
+/** Turn a cell into a scenario, applying the axes the way the study did. */
+function addCellAsScenario(study, cell) {
+  const project = state.project;
+  const source = project.scenarios.find((s) => s.id === study.scenario_id);
+  if (!source) {
+    toast('The scenario this study varied is gone.', 'ui.unknown_scenario');
+    return;
+  }
+  if (project.scenarios.length >= state.session.limits.max_scenarios) {
+    toast(`A project holds up to ${state.session.limits.max_scenarios} scenarios.`, 'limit.scenarios');
+    return;
+  }
+  const scenario = addCopy(source, `${source.name}, ${cell.axis_values.map((v) => formatAxis(v)).join(' x ')}`);
+  study.axes.forEach((axis, index) => {
+    const value = cell.axis_values[index];
+    switch (axis.param) {
+      case 'battery_energy_kwh': scenario.battery.nameplate_energy_kwh = value; break;
+      case 'battery_power_kw':
+        scenario.battery.max_charge_kw = value;
+        scenario.battery.max_discharge_kw = value;
+        scenario.inverter.battery_power_kw = value;
+        break;
+      case 'reserve_soc_pct': scenario.battery.reserve_soc_pct = value; break;
+      case 'initial_capacity_pct': scenario.initial_capacity_pct = value; break;
+      case 'import_price_multiplier': scenario.tariff.import_price_multiplier = value; break;
+      case 'demand_price_per_kw_month_usd':
+        for (const label of Object.keys(scenario.tariff.demand_prices_per_kw_month_usd)) {
+          scenario.tariff.demand_prices_per_kw_month_usd[label] = value;
+        }
+        break;
+      case 'calendar_fade_pct_per_year': scenario.degradation.calendar_fade_pct_per_year = value; break;
+      case 'capex_usd': scenario.economics.capex_usd = value; break;
+      case 'discount_rate_pct_per_year': scenario.economics.discount_rate_pct_per_year = value; break;
+      default: break;
+    }
+  });
+  // The cost the study used for this cell, moved with its size or not.
+  scenario.economics.capex_usd = cell.metrics.installed_cost_usd;
+  checkpoint('add a sensitivity cell as a scenario');
+  project.scenarios.push(scenario);
+  state.selected = scenario.id;
+  syncUnsaved();
+  // This screen now has unsaved changes to say so about.
+  if (state.view === 'sensitivity') renderSensitivity();
+  toast(`Added "${scenario.name}" to the scenarios.`, null, true, {
+    label: 'Open it', run: () => show('scenarios'),
+  });
+}
+
+function heatSection(study) {
+  const metric = METRICS.find((m) => m.id === state.studyMetric) ?? METRICS[0];
+  const picker = el('div', { class: 'segments' }, METRICS.map((m) => el('button', {
+    type: 'button',
+    'aria-pressed': m.id === metric.id ? 'true' : 'false',
+    text: m.title,
+    onclick: () => { state.studyMetric = m.id; renderSensitivity(); },
+  })));
+  return el('section', { class: 'stack' }, [
+    el('div', {}, [el('h3', { text: 'Every cell' }), picker]),
+    heatTable(study, metric),
+  ]);
 }
 
 /**
@@ -1571,130 +3773,201 @@ function renderSensitivity() {
  * magnitudes and get a single-hue ramp. A rainbow would invent boundaries the data
  * does not have.
  */
-function heatCard(study, title, extract, unit, scale) {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: title }));
-
+function heatTable(study, metric) {
   const rows = study.axes[0];
   const cols = study.axes[1];
-  const values = study.cells.map((c) => extract(c.metrics));
-  const low = Math.min(...values);
-  const high = Math.max(...values);
+  const values = study.cells.map((c) => metric.read(c.metrics)).filter((v) => v !== null && v !== undefined);
+  const low = values.length ? Math.min(...values) : 0;
+  const high = values.length ? Math.max(...values) : 1;
   const extent = Math.max(Math.abs(low), Math.abs(high), 1e-9);
 
-  const SEQ = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#2a78d6', '#256abf', '#184f95', '#0d366b'];
-  const POS = ['#9ec5f4', '#5598e7', '#2a78d6', '#184f95'];
-  const NEG = ['#f2b8b8', '#e87b7b', '#e34948', '#d03b3b'];
-  const colourFor = (v) => {
-    if (scale === 'diverging') {
-      if (Math.abs(v) < extent * 0.02) return css('--gridline');
-      const ramp = v >= 0 ? POS : NEG;
-      return ramp[Math.min(ramp.length - 1, Math.round((Math.abs(v) / extent) * (ramp.length - 1)))];
+  const ramp = (prefix, count) => Array.from({ length: count }, (_, i) => css(`--${prefix}-${i}`));
+  const seq = ramp('seq', 13);
+  const pos = ramp('div-pos', 4);
+  const neg = ramp('div-neg', 4).reverse(); // Lightest first, like the positive side.
+  const fillFor = (v) => {
+    if (metric.scale === 'diverging') {
+      if (Math.abs(v) < extent * 0.02) return css('--div-mid');
+      const side = v >= 0 ? pos : neg;
+      return side[Math.min(side.length - 1, Math.round((Math.abs(v) / extent) * (side.length - 1)))];
     }
     const t = high - low < 1e-9 ? 0 : (v - low) / (high - low);
-    return SEQ[Math.min(SEQ.length - 1, Math.round(t * (SEQ.length - 1)))];
+    return seq[Math.min(seq.length - 1, Math.round(t * (seq.length - 1)))];
   };
 
+  const best = bestOf(study, metric);
   const table = el('table', { class: 'heat' });
-  const head = el('tr', {}, el('th', { text: cols ? '' : rows.param }));
   const colValues = cols ? cols.values : [null];
-  for (const c of colValues) head.appendChild(el('th', { text: c === null ? title : String(c) }));
-  table.appendChild(el('thead', {}, head));
+  const head = el('tr', {}, [
+    el('th', { class: 'axis-name', text: paramLabel(rows.param) }),
+    ...colValues.map((c) => el('th', { text: c === null ? metric.title : formatAxis(c) })),
+  ]);
+  table.appendChild(el('thead', {}, [
+    cols ? el('tr', {}, [el('th', {}), el('th', { colspan: String(colValues.length), text: paramLabel(cols.param) })]) : null,
+    head,
+  ]));
 
   const body = el('tbody');
   rows.values.forEach((rowValue, r) => {
-    const tr = el('tr', {}, el('th', { text: String(rowValue) }));
+    const tr = el('tr', {}, el('th', { scope: 'row', text: formatAxis(rowValue) }));
     colValues.forEach((_, c) => {
-      const index = r * colValues.length + c;
-      const cell = study.cells[index];
-      if (!cell) { tr.appendChild(el('td', { text: '' })); return; }
-      const value = extract(cell.metrics);
+      const cell = study.cells[r * colValues.length + c];
+      const value = cell ? metric.read(cell.metrics) : null;
+      if (value === null || value === undefined) {
+        tr.appendChild(el('td', { text: cell && metric.id === 'payback' ? noPaybackText(cell.metrics.installed_cost_usd, 'Not repaid') : '' }));
+        return;
+      }
+      const fill = fillFor(value);
+      const marked = best.varies && best.cells.includes(cell);
       tr.appendChild(el('td', {
-        style: { background: colourFor(value), color: css('--ink') },
+        class: marked ? 'marked' : '',
+        style: { background: fill, color: inkOn(fill) },
         // Values are printed in every cell, so the matrix reads without decoding the
         // colour at all — which is the relief channel the palette requires.
-        text: fmt.n(value, 0),
-        title: `${rows.param} ${rowValue}${cols ? ` · ${cols.param} ${cols.values[c]}` : ''}: ${fmt.n(value, 1)} ${unit}`,
-      }));
+        title: `${describeCell(study, cell)}: ${metric.format(value)}`,
+      }, [
+        grouped(value, metric.unit === 'USD' || Math.abs(value) >= 1000 ? 0 : 1),
+        marked ? el('span', { class: 'cell-mark', text: metric.better === 'high' ? 'highest' : 'lowest' }) : null,
+      ]));
     });
     body.appendChild(tr);
   });
   table.appendChild(body);
-  card.appendChild(el('div', { class: 'scroll' }, table));
-  card.appendChild(el('p', { class: 'chart-note', text:
-    `Rows: ${rows.param}. ${cols ? `Columns: ${cols.param}. ` : ''}Values in ${unit}. ` +
-    'Every cell was simulated in full.' }));
-  return card;
+
+  return el('div', {}, [
+    el('div', { class: 'scroll' }, table),
+    el('p', { class: 'chart-note', text:
+      `${metric.title} in ${metric.unit}. ` +
+      (best.varies
+        ? `The outlined cell${best.cells.length === 1 ? ' is' : 's are'} the ${metric.better === 'high' ? 'highest' : 'lowest'} of those tested.`
+        : 'No cell stands out on this measure.') +
+      (study.capex_per_kwh_usd != null
+        ? ` Installed cost moved with battery energy at ${study.capex_per_kwh_usd} USD per kWh.` : '') }),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
 // 5 — Export
 // ---------------------------------------------------------------------------
 
+async function runExport() {
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  if (state.study && isUnsaved()) {
+    // Saving ends the study, because it was run on what is about to be replaced. That is
+    // the user's decision to make, not something to find out from a missing file.
+    const choice = await openDialog((dialog, close) => {
+      dialog.appendChild(el('h3', { text: 'Exporting will leave out this study' }));
+      dialog.appendChild(el('p', { text:
+        'You have unsaved changes, and exporting saves them first. The sensitivity study on screen was run on the ' +
+        'last saved assumptions, so saving discards it and the bundle will not include it.' }));
+      dialog.appendChild(el('div', { class: 'dialog-actions' }, [
+        el('button', { type: 'button', text: 'Keep working', onclick: () => close('keep') }),
+        el('button', { type: 'button', text: 'Save and export without the study', class: 'primary', onclick: () => close('save') }),
+      ]));
+    });
+    if (choice !== 'save') return;
+  }
+  if (!(await ensureSaved())) return;
+  if (state.busy) { toast(busyText(), 'server.busy'); return; }
+  const { stamp, reply, late } = await sendTagged(currentStamp, (stamp) => {
+    const mark = markBusy('export', stamp);
+    renderExport();
+    return guard(() => request(projectPath('/export'), {
+      method: 'POST',
+      body: { sensitivity: state.studyRequest },
+      revision: stamp.revision,
+    })).finally(() => releaseBusy(mark));
+  });
+  if (late) {
+    toast(stamp.project === state.project?.name
+      ? `The export finished after the project changed. It describes the earlier version and is in ${reply.body.directory}. Export again for the current one.`
+      : `The export of "${stamp.project}" finished after you left it, and is in ${reply.body.directory}.`, 'ui.late_result');
+  } else if (reply) {
+    state.bundle = reply.body;
+    toast(`Wrote ${reply.body.artifacts.length} files.`, null, true);
+  }
+  redrawAfterJob();
+}
+
 function renderExport() {
   const root = document.getElementById('view-export');
   clear(root);
+  if (!state.project.dataset) {
+    root.appendChild(el('div', { class: 'banner', text: 'Import interval data first.' }));
+    return;
+  }
 
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', { text: 'Export' }));
-  card.appendChild(el('p', { class: 'muted', text:
-    'A self-contained HTML report with no script and no network access, the full results as JSON, ' +
-    'every interval as CSV, a provenance manifest with the input hashes, and a SHA-256 checksum of ' +
-    'every file. Written into your workspace folder.' }));
-
-  const go = el('button', { class: 'primary', type: 'button', text: 'Export bundle' });
-  go.addEventListener('click', async () => {
-    go.disabled = true;
-    go.textContent = 'Writing…';
-    const bundle = await guard(() => api(`/api/projects/${encodeURIComponent(state.project.name)}/export`, {
-      method: 'POST',
-      body: { sensitivity: state.studyRequest },
-    }));
-    go.disabled = false;
-    go.textContent = 'Export bundle';
-    if (!bundle) return;
-    state.bundle = bundle;
-    renderExport();
-    toast(`Wrote ${bundle.artifacts.length} files.`, null, true);
-  });
-  card.appendChild(el('div', { class: 'row' }, [
-    go,
-    state.study ? el('span', { class: 'tiny muted', text: 'The current sensitivity study will be included.' })
-                : el('span', { class: 'tiny muted', text: 'Run a sensitivity study first to include one.' }),
+  const go = el('button', { class: state.bundle ? '' : 'primary', type: 'button',
+                            text: state.busy ? BUSY_LABEL[state.busy.what] : (state.bundle ? 'Export again' : 'Export bundle'), onclick: runExport });
+  go.disabled = Boolean(state.busy);
+  const notice = staleNotice('You have unsaved changes. Exporting saves them first.');
+  if (notice) root.appendChild(notice);
+  root.appendChild(el('section', { class: 'stack' }, [
+    el('div', {}, [
+      el('h3', { text: 'Export' }),
+      el('p', { class: 'lede', text:
+        'An HTML report, results as JSON, every interval as CSV, a provenance manifest with input hashes, and ' +
+        'SHA-256 checksums. Written into your workspace folder.' }),
+    ]),
+    el('div', { class: 'row' }, [
+      go,
+      busyNote(),
+      state.study
+        ? el('span', { class: 'tiny muted', text: isUnsaved()
+          ? 'Saving discards the sensitivity study on screen, so this export would leave it out.'
+          : 'The current sensitivity study will be included.' })
+        : null,
+    ]),
   ]));
-  root.appendChild(card);
 
   if (!state.bundle) return;
   const bundle = state.bundle;
+  const project = state.project.name;
 
-  const files = el('div', { class: 'card' });
-  files.appendChild(el('h3', { text: 'Bundle' }));
-  files.appendChild(el('p', { class: 'mono tiny muted', text: bundle.directory }));
+  const actions = [];
+  if (state.desktop) {
+    actions.push(el('button', { type: 'button', class: 'primary', text: 'Save the whole bundle to a folder', onclick: async () => {
+      const saved = await guard(() => shell('save_bundle', {
+        project, key: bundle.key, artifacts: bundle.artifacts.map((a) => a.filename),
+      }));
+      if (saved) toast(`Saved to ${saved}.`, null, true);
+    } }));
+    actions.push(el('button', { type: 'button', text: 'Show in file manager', onclick: () =>
+      guard(() => shell('reveal_bundle', { project, key: bundle.key })) }));
+  }
+
+  const files = el('section', { class: 'stack' }, [
+    el('div', {}, [el('h3', { text: 'Bundle' }), el('p', { class: 'mono tiny muted', text: bundle.directory })]),
+    actions.length ? el('div', { class: 'row' }, actions) : null,
+  ]);
+  const list = el('div');
   for (const artifact of bundle.artifacts) {
-    const href = `/api/projects/${encodeURIComponent(state.project.name)}/exports/` +
-                 `${encodeURIComponent(bundle.key)}/${encodeURIComponent(artifact.filename)}`;
-    const download = el('button', { type: 'button', text: 'Download' });
-    download.addEventListener('click', async () => {
-      const response = await fetch(href, { headers: { Authorization: `Bearer ${state.token}` } });
-      if (!response.ok) { toast('Could not read that artifact.', 'export.download_failed'); return; }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = el('a', { href: url, download: artifact.filename });
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    });
-    files.appendChild(el('div', { class: 'artifact' }, [
+    const save = el('button', { type: 'button', text: state.desktop ? 'Save as' : 'Download', onclick: () => saveArtifact(bundle, artifact) });
+    list.appendChild(el('div', { class: 'artifact' }, [
       el('div', {}, [
         el('div', { class: 'a-name', text: artifact.filename }),
         el('div', { class: 'a-desc', text: artifact.description }),
-        el('div', { class: 'a-hash', text: `${artifact.sha256} · ${artifact.size_bytes.toLocaleString()} bytes` }),
+        el('div', { class: 'a-hash', text: `${artifact.sha256}, ${artifact.size_bytes.toLocaleString()} bytes` }),
       ]),
-      download,
+      save,
     ]));
   }
+  files.appendChild(list);
   root.appendChild(files);
+}
+
+async function saveArtifact(bundle, artifact) {
+  if (state.desktop) {
+    const saved = await guard(() => shell('save_artifact', {
+      project: state.project.name, key: bundle.key, artifact: artifact.filename,
+    }));
+    if (saved) toast(`Saved ${saved}.`, null, true);
+    return;
+  }
+  const href = `${projectPath('/exports/')}${encodeURIComponent(bundle.key)}/${encodeURIComponent(artifact.filename)}`;
+  const response = await fetch(href, { headers: { Authorization: `Bearer ${state.token}` } });
+  if (!response.ok) { toast('Could not read that artifact.', 'export.download_failed'); return; }
+  downloadBlob(await response.blob(), artifact.filename);
 }
 
 // ---------------------------------------------------------------------------

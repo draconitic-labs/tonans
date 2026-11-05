@@ -51,7 +51,8 @@ const MAX_JSON_BYTES: usize = 96 * 1024 * 1024;
 /// otherwise. Everything the UI needs is compiled into the binary and served from
 /// this origin. There is no CDN, no font service, no analytics — and no way to add
 /// one without changing this line, which is the point of writing it this way round.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+pub const CSP: &str =
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
      font-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; \
      base-uri 'none'; object-src 'none'";
 
@@ -127,6 +128,19 @@ pub struct Router {
     pub state: Arc<AppState>,
 }
 
+/// Do one of the routes that can use gigabytes: one at a time, and on a thread of its own.
+fn heavy(
+    state: &AppState,
+    what: &str,
+    project: &str,
+    work: impl FnOnce() -> Response + Send,
+) -> Response {
+    match state.begin_heavy_job(what, project) {
+        Ok(_job) => http::on_its_own_thread(work),
+        Err(refusal) => api::refused(refusal),
+    }
+}
+
 impl Handler for Router {
     fn preflight(&self, request: &Request) -> Option<Response> {
         self.guard(request).map(Self::secure)
@@ -150,6 +164,10 @@ impl Handler for Router {
 
     fn handle(&self, request: &Request) -> Response {
         Self::secure(self.route(request))
+    }
+
+    fn panic_response(&self) -> Response {
+        Self::secure(http::internal_error())
     }
 }
 
@@ -187,7 +205,7 @@ impl Router {
             return Some(problem(
                 403,
                 "server.bad_host",
-                "This request did not arrive at the address Tonans is serving.",
+                "This request did not arrive at the address being served.",
             ));
         }
 
@@ -219,8 +237,7 @@ impl Router {
                 return Some(problem(
                     401,
                     "server.unauthorized",
-                    "This request carried no valid launch token. Tonans mints one per launch and \
-                     hands it to the page it serves.",
+                    "This request carried no valid launch token.",
                 ));
             }
 
@@ -228,12 +245,7 @@ impl Router {
             // no-cors GET carries no Origin and reaches this far, so counting refused
             // requests would let any page spend the budget and lock the real UI out.
             if !state.allow_request() {
-                return Some(problem(
-                    429,
-                    "server.rate_limited",
-                    "Too many requests. Tonans is a single-user local application; this many \
-                     requests in this short a time means something is looping.",
-                ));
+                return Some(problem(429, "server.rate_limited", "Too many requests."));
             }
         }
 
@@ -248,9 +260,12 @@ impl Router {
         match (method, segments.as_slice()) {
             ("GET", []) => assets::index(),
             ("GET", ["app.js"]) => assets::script(),
+            ("GET", ["logic.mjs"]) => assets::logic(),
             ("GET", ["styles.css"]) => assets::stylesheet(),
             ("GET", ["palette.css"]) => assets::palette(),
             ("GET", ["favicon.svg"]) => assets::favicon(),
+            ("GET", ["fonts", name]) => assets::font(name)
+                .unwrap_or_else(|| problem(404, "server.not_found", "No such font.")),
 
             ("GET", ["api", "session"]) => api::session(state),
             ("GET", ["api", "projects"]) => api::list_projects(state),
@@ -258,22 +273,36 @@ impl Router {
             ("GET", ["api", "projects", name]) => api::open_project(state, name),
             ("PUT", ["api", "projects", name]) => api::save_project(state, name, request),
             ("POST", ["api", "upload"]) => api::upload(state, request),
-            ("POST", ["api", "projects", name, "import"]) => api::import(state, name, request),
-            ("POST", ["api", "projects", name, "run"]) => api::run(state, name),
-            ("POST", ["api", "projects", name, "sensitivity"]) => {
-                api::sensitivity(state, name, request)
+            ("POST", ["api", "upload", "sample"]) => api::upload_sample(state),
+            ("POST", ["api", "upload", "cancel"]) => api::cancel_upload(state, request),
+            ("POST", ["api", "upload", "suggest"]) => api::suggest_mapping(state, request),
+            ("GET", ["api", "templates", "interval-csv"]) => api::csv_template(),
+            ("GET", ["api", "projects", name, "profile"]) => api::profile(state, name),
+            ("GET", ["api", "projects", name, "revision"]) => api::project_revision(state, name),
+            ("POST", ["api", "projects", name, "import"]) => {
+                heavy(state, "an import", name, || {
+                    api::import(state, name, request)
+                })
             }
-            ("POST", ["api", "projects", name, "export"]) => api::export(state, name, request),
+            ("POST", ["api", "projects", name, "run"]) => {
+                heavy(state, "a run", name, || api::run(state, name, request))
+            }
+            ("POST", ["api", "projects", name, "sensitivity"]) => {
+                heavy(state, "a study", name, || {
+                    api::sensitivity(state, name, request)
+                })
+            }
+            ("POST", ["api", "projects", name, "export"]) => {
+                heavy(state, "an export", name, || {
+                    api::export(state, name, request)
+                })
+            }
             ("GET", ["api", "projects", name, "exports", key, artifact]) => {
                 api::download(state, name, key, artifact)
             }
             ("POST", ["api", "shutdown"]) => api::shutdown(state),
 
-            _ => problem(
-                404,
-                "server.not_found",
-                "No such route. Tonans serves only its own application and API.",
-            ),
+            _ => problem(404, "server.not_found", "No such route."),
         }
     }
 }
@@ -372,6 +401,26 @@ mod tests {
             }
         }
         assert!(limited, "an authorized runaway loop was never rate limited");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_panic_response_carries_the_security_headers() {
+        let root = std::env::temp_dir().join(format!(
+            "tonans-panic-regression-{}-{}",
+            std::process::id(),
+            token::mint().unwrap()
+        ));
+        let server = Server::bind(Workspace::open(&root).unwrap(), 0).unwrap();
+        let router = Router {
+            state: server.state,
+        };
+        let response = router.panic_response();
+        assert_eq!(response.status, 500);
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| name == "content-security-policy" && value == CSP));
         std::fs::remove_dir_all(root).unwrap();
     }
 

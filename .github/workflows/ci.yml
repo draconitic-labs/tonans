@@ -15,7 +15,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -24,11 +24,41 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install WebKitGTK and GTK development packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev
       - name: Install pinned Rust and lint components
         run: rustup toolchain install 1.96.1 --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - name: Test the workspace
+        if: runner.os != 'Windows'
+        run: cargo test --workspace --locked
+      # The dialog plugin's Windows backend imports from Common Controls 6, which needs an
+      # application manifest. tauri-build gives the real binary one, and a test harness does
+      # not get it, so the shell's test binary would not load. Its tests are platform-neutral
+      # and run on Linux; the release build and the --version step below cover the binary.
+      - name: Test the workspace except the shell's test binary
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --exclude tonans-desktop --locked
+      # Node is on the runner images. The tests need it and nothing else.
+      - name: Test the page's rules
+        run: node --test crates/tonans-app/ui-tests/logic.test.mjs
       - run: cargo build --workspace --release --locked
-      - name: Smoke-test packaged command interface
+      - name: Command prints its help
         run: cargo run --release --locked -p tonans-app -- --help
+      - name: Desktop binary prints its version
+        if: runner.os == 'Linux'
+        run: |
+          version="$(cargo run --release --locked -p tonans-desktop -- --version)"
+          echo "$version"
+          grep -E '^Tonans [0-9]+\.[0-9]+\.[0-9]+ \(model [0-9]+\.[0-9]+\.[0-9]+\)$' <<<"$version"
+      # A Windows-subsystem binary has no console to print to, so this proves only that the
+      # binary and its libraries load and that it exits cleanly.
+      - name: Desktop binary loads and exits
+        if: runner.os == 'Windows'
+        run: cargo run --release --locked -p tonans-desktop -- --version

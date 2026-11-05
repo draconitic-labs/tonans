@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tonans",
+  "version": "0.1.0",
+  "identifier": "com.flintglade.tonans",
+  "build": {},
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+      "capabilities": []
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "rpm", "nsis"],
+    "category": "Productivity",
+    "shortDescription": "Local-first microgrid scenario workbench",
+    "longDescription": "Compares battery, tariff, renewable-generation, and outage-planning scenarios on your own interval data. Planning estimates for human review, not certified designs.",
+    "publisher": "Flintglade",
+    "copyright": "Copyright (C) 2026 Flintglade. Licensed under Apache-2.0.",
+    "license": "Apache-2.0",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

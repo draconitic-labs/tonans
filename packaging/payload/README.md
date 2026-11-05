@@ -37,7 +37,7 @@ registry and nothing outside its own workspace folder.
    Do not extract into `C:\Program Files`; Tonans is unsigned and does not need
    administrator rights, and it should not be given any.
 3. Verify the download before you run it (see **Verifying** below).
-4. Double-click `Tonans.exe`.
+4. Run `Tonans.exe` from a command prompt.
 
 **This binary is unsigned.** Windows SmartScreen will warn you, and it is right to:
 an unsigned executable is one whose publisher Windows cannot confirm. If you did
@@ -74,22 +74,22 @@ binary. `NOTICES.md` carries the third-party licences.
 
 ## Running it
 
-Double-clicking `Tonans.exe` starts a local server and opens your browser at it.
+`Tonans.exe` is the Tonans command, without a window. The native desktop window is not in
+this package yet. Run it from a command prompt: it never opens a browser.
 
 - Tonans binds **only to `127.0.0.1`**, on a port the operating system picks. No
   other machine can reach it.
-- Each launch mints a **launch-scoped bearer token**, printed in the URL. Without that token
-  the control API refuses every request — because a web page you happen to have
-  open in another tab can also reach `127.0.0.1`, and the token is what it cannot
-  guess.
+- Each launch mints a **launch-scoped bearer token**. It appears in the link printed to
+  your terminal, and is left out when output is being captured. Without that token the
+  control API refuses every request — because a web page you happen to have open in
+  another tab can also reach `127.0.0.1`, and the token is what it cannot guess.
 - **Nothing is sent anywhere.** No telemetry, no analytics, no update check, no
   fonts, no remote scripts. The interface is compiled into the executable.
 
 From a command prompt:
 
 ```
-Tonans.exe                                   Launch (opens a browser)
-Tonans.exe --no-browser                      Launch and just print the URL
+Tonans.exe                                   Start the server and print its link
 Tonans.exe --workspace D:\Work\Tonans        Keep projects somewhere else
 Tonans.exe run --project "Demo - Riverside Works"   Run headlessly, write the export bundle
 Tonans.exe --help

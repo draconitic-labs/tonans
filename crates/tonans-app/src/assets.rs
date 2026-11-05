@@ -10,8 +10,35 @@ use crate::http::Response;
 
 const INDEX: &str = include_str!("../ui/index.html");
 const SCRIPT: &str = include_str!("../ui/app.js");
+const LOGIC: &str = include_str!("../ui/logic.mjs");
 const STYLESHEET: &str = include_str!("../ui/styles.css");
 const FAVICON: &str = include_str!("../ui/favicon.svg");
+
+/// Barlow, under the SIL Open Font License (`ui/fonts/OFL.txt`). Its letterforms come
+/// from highway signs and equipment plates, and it is compiled in so the interface
+/// looks the same on every machine with no font fetched from anywhere.
+const FONTS: &[(&str, &[u8])] = &[
+    (
+        "barlow-400.woff2",
+        include_bytes!("../ui/fonts/barlow-400.woff2"),
+    ),
+    (
+        "barlow-500.woff2",
+        include_bytes!("../ui/fonts/barlow-500.woff2"),
+    ),
+    (
+        "barlow-600.woff2",
+        include_bytes!("../ui/fonts/barlow-600.woff2"),
+    ),
+    (
+        "barlow-semi-condensed-500.woff2",
+        include_bytes!("../ui/fonts/barlow-semi-condensed-500.woff2"),
+    ),
+    (
+        "barlow-semi-condensed-600.woff2",
+        include_bytes!("../ui/fonts/barlow-semi-condensed-600.woff2"),
+    ),
+];
 
 /// `GET /`
 pub fn index() -> Response {
@@ -21,6 +48,11 @@ pub fn index() -> Response {
 /// `GET /app.js`
 pub fn script() -> Response {
     Response::new(200, "text/javascript; charset=utf-8", SCRIPT)
+}
+
+/// `GET /logic.mjs`
+pub fn logic() -> Response {
+    Response::new(200, "text/javascript; charset=utf-8", LOGIC)
 }
 
 /// `GET /styles.css`
@@ -33,6 +65,14 @@ pub fn favicon() -> Response {
     Response::new(200, "image/svg+xml", FAVICON)
 }
 
+/// `GET /fonts/{name}`. Only the names compiled in exist.
+pub fn font(name: &str) -> Option<Response> {
+    FONTS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, bytes)| Response::new(200, "font/woff2", *bytes))
+}
+
 /// `GET /palette.css`
 ///
 /// Generated from the single validated table in `tonans_core::svg::palette`, rather
@@ -43,7 +83,7 @@ pub fn palette() -> Response {
     Response::new(
         200,
         "text/css; charset=utf-8",
-        tonans_core::svg::palette_css(),
+        tonans_core::svg::palette_css() + &tonans_core::svg::ramp_css(),
     )
 }
 
@@ -103,6 +143,7 @@ mod tests {
         for (name, source) in [
             ("index.html", INDEX),
             ("app.js", SCRIPT),
+            ("logic.mjs", LOGIC),
             ("styles.css", STYLESHEET),
         ] {
             for forbidden in [
@@ -126,20 +167,65 @@ mod tests {
         // A scenario name, a warning message, and a source filename all come from data
         // Tonans does not control. Every one of them reaches the page through
         // `textContent`. An `innerHTML` here would be an injection waiting to happen.
+        for (name, source) in [("app.js", SCRIPT), ("logic.mjs", LOGIC)] {
+            let code = code_only(source);
+            for forbidden in [
+                "eval(",
+                "new Function(",
+                "innerHTML",
+                "outerHTML",
+                "document.write",
+                "insertAdjacentHTML",
+            ] {
+                assert!(
+                    !code.contains(forbidden),
+                    "{name} uses '{forbidden}'. Build DOM nodes and set textContent instead."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_request_that_produces_a_result_is_tagged_and_can_be_dropped_when_late() {
+        // The rule itself is tested under Node in `ui-tests/logic.test.mjs`. This is what
+        // ties it to the page: run, study, and export each go through it and send their
+        // revision, so none of them can show an answer about a state that has gone.
         let code = code_only(SCRIPT);
-        for forbidden in [
-            "eval(",
-            "new Function(",
-            "innerHTML",
-            "outerHTML",
-            "document.write",
-            "insertAdjacentHTML",
-        ] {
+        for route in ["/run", "/sensitivity", "/export"] {
+            let at = code
+                .find(&format!("projectPath('{route}')"))
+                .unwrap_or_else(|| panic!("no request to {route}"));
+            let before = &code[at.saturating_sub(220)..at];
+            let after = &code[at..(at + 200).min(code.len())];
+            assert!(before.contains("sendTagged("), "{route}: {before}");
             assert!(
-                !code.contains(forbidden),
-                "app.js uses '{forbidden}'. Build DOM nodes and set textContent instead."
+                after.contains("revision: stamp.revision"),
+                "{route}: {after}"
             );
         }
+        // And the one word that claims results are current comes from the one rule.
+        assert!(!code.contains("'Current'"));
+        assert!(LOGIC.contains("'Current'"));
+    }
+
+    #[test]
+    fn reopening_drops_the_edits_only_once_the_latest_version_has_arrived() {
+        let code = code_only(SCRIPT);
+        let start = code.find("async function offerReopen()").unwrap();
+        let end = start + code[start..].find("\n}\n").unwrap();
+        assert!(
+            !code[start..end].contains("restoreEditable"),
+            "a Reopen that then fails would leave the screen showing edits the project has lost"
+        );
+    }
+
+    #[test]
+    fn a_large_file_is_measured_before_any_of_it_is_read() {
+        let code = code_only(SCRIPT);
+        let measured = code.find("fileTooLarge(file.name, file.size").unwrap();
+        let read = code.find("file.arrayBuffer()").unwrap();
+        assert!(measured < read);
+        assert!(code.contains("encodeFileNameHeader(filename"));
     }
 
     #[test]
@@ -151,6 +237,30 @@ mod tests {
         assert!(SCRIPT.contains("if (!unit) missingUnits.push(header)"));
         assert!(!SCRIPT.contains("guessRole("));
         assert!(!SCRIPT.contains("guessUnit("));
+    }
+
+    #[test]
+    fn a_mapping_suggestion_only_happens_when_the_user_asks() {
+        // The product does not guess silently: rows start unmapped, and the one call to
+        // the suggestion route is the button's click handler.
+        assert_eq!(SCRIPT.matches("/api/upload/suggest").count(), 1);
+        assert_eq!(SCRIPT.matches("suggestFromHeaders(").count(), 2);
+        assert!(SCRIPT.contains("onclick: () => suggestFromHeaders(receipt)"));
+        assert!(SCRIPT.contains("role: '__unmapped'"));
+        // And a standing suggestion holds the import until the user has reviewed it.
+        assert!(SCRIPT.contains("go.disabled = standing && !state.mappingReviewed"));
+    }
+
+    #[test]
+    fn every_font_the_stylesheet_names_is_compiled_in() {
+        for (index, _) in STYLESHEET.match_indices("url(\"/fonts/") {
+            let rest = &STYLESHEET[index + "url(\"/fonts/".len()..];
+            let name = &rest[..rest.find('"').unwrap()];
+            assert!(font(name).is_some(), "styles.css names {name}");
+        }
+        assert!(STYLESHEET.contains("/fonts/barlow-400.woff2"));
+        assert!(font("../../etc/passwd").is_none());
+        assert!(font("OFL.txt").is_none());
     }
 
     #[test]
@@ -171,14 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn the_disclaimer_is_in_the_markup_not_only_in_the_script() {
-        // If the script fails to load, the page must still say what this is.
-        assert!(INDEX.contains("Planning estimate"));
-        assert!(INDEX.contains("not an AC power-flow study"));
-        assert!(
-            INDEX.contains("never controls equipment")
-                || INDEX.contains("It never controls equipment")
-        );
+    fn help_carries_the_planning_boundary() {
+        assert!(SCRIPT.contains("el('p', { text: state.session.disclaimer })"));
+        assert!(SCRIPT.contains("state.session.model_exclusions.map"));
     }
 
     #[test]

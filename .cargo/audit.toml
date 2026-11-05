@@ -1,0 +1,20 @@
+# Each advisory `cargo audit --deny warnings` is told to pass over, and why. None of these
+# has a release Tonans could move to today: each comes from a stack the desktop shell's
+# Tauri version pins. Check this list again whenever Tauri moves. The same reasons are in
+# docs/RELEASE-CHECKLIST.md, under "Dependency audit".
+[advisories]
+ignore = [
+    # glib 0.18.5: VariantStrIter is unsound. Fixed in glib 0.20; gtk 0.18 under Tauri holds
+    # glib at 0.18. Tonans itself calls only glib::set_prgname, and no crate in the locked
+    # tree other than glib names VariantStrIter or array_iter_str.
+    "RUSTSEC-2024-0429",
+    # proc-macro-error 1.0.4: unmaintained, no replacement in this stack. Reached only through
+    # glib-macros and gtk3-macros at compile time. It is not in the binary.
+    "RUSTSEC-2024-0370",
+    # zvariant, zbus_names, zvariant_derive: unmaintained, merged into zbus 6, no patched
+    # release. Reached through zbus 5 under tauri-plugin-opener, on Linux only, for the one
+    # call that asks the local file manager to show a folder.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]

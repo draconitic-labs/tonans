@@ -5,8 +5,8 @@
 //!
 //! There is no solver here and no curve fit. The whole model is a year of
 //! simulated grid cost, a difference against a baseline, a fade approximation,
-//! and a discounted cash flow — and the report prints the year-by-year table so a
-//! reader can add it up themselves.
+//! and a discounted cash flow. The report prints the year-by-year table so a reader
+//! can follow it, and `summary.json` holds the exact figures to add up.
 //!
 //! # The three approximations, stated plainly
 //!
@@ -16,8 +16,9 @@
 //! raises a caution — because a demand charge does not scale with time, and three
 //! months of summer data annualized by four is not a year.
 //!
-//! **Fade.** Capacity is lost linearly, in two terms: a calendar term per year and
-//! a cycling term per equivalent full cycle. It is not an electrochemical model.
+//! **Fade.** Capacity is lost at a fixed percentage a year, compounding: usable capacity in
+//! year `n` is `initial x (1 - r)^(n - 1)`, where `r` adds a calendar term per year and a
+//! cycling term per equivalent full cycle. It is not an electrochemical model.
 //! It knows nothing about depth of discharge, C-rate, or thermal history. A
 //! vendor's warranted capacity curve beats it every time, and where one exists it
 //! should be used instead.
@@ -159,11 +160,44 @@ pub fn evaluate(
             format!(
                 "the data set covers {hours:.0} hours, so every annual figure below is the \
                  simulated period multiplied by {factor:.3}. Demand charges and seasonal load do \
-                 not scale with elapsed time, so treat these figures as indicative only. Import a \
-                 full year for economics you can defend.",
+                 not scale with elapsed time.",
                 hours = energy.duration_hours,
                 factor = annualization_multiplier
             ),
+        ));
+    }
+
+    // Charged per calendar month touched, however little of the month the data covers, and
+    // not scaled to a twelfth of anything. The numbers stand; this says what is in them.
+    if cost.billed_month_count != 12 {
+        let months = cost.billed_month_count;
+        let (billed, each) = if months == 1 {
+            (
+                "1 calendar month at the site's time zone was billed".to_string(),
+                "with",
+            )
+        } else {
+            (
+                format!("{months} calendar months at the site's time zone were billed"),
+                "each with",
+            )
+        };
+        let charges = match (cost.demand_charge_usd != 0.0, cost.fixed_charge_usd != 0.0) {
+            (true, true) => Some("a full demand charge and a full fixed charge"),
+            (true, false) => Some("a full demand charge"),
+            (false, true) => Some("a full fixed charge"),
+            (false, false) => None,
+        };
+        ledger.push(Warning::caution(
+            "cost.billed_months_not_twelve",
+            match charges {
+                Some(charges) => {
+                    format!(
+                        "{billed}, {each} {charges} however little of the month the data covers."
+                    )
+                }
+                None => format!("{billed}. No demand charge or fixed charge applies."),
+            },
         ));
     }
 
@@ -332,16 +366,18 @@ pub fn evaluate(
     }
 
     let degradation_method = format!(
-        "Linear fade approximation: {calendar:.2}% per year (calendar) + {cycle:.4}% per equivalent \
-         full cycle x {cycles:.1} cycles per year = {total:.2}% per year. Benefit in later years is \
-         {scaling}. This is a transparent approximation, not an electrochemical lifetime model.",
+        "Compounding fade approximation: {calendar:.2}% per year (calendar) + {cycle:.4}% per \
+         equivalent full cycle x {cycles:.1} cycles per year = {total:.2}% per year, each year's \
+         loss taken from the capacity left after the year before. Benefit in later years is \
+         {scaling}.",
         calendar = degradation.calendar_fade_pct_per_year,
         cycle = degradation.cycle_fade_pct_per_cycle,
         cycles = equivalent_full_cycles_per_year,
         total = annual_fade_pct_per_year,
         scaling = match degradation.benefit_scaling {
             BenefitScaling::ProportionalToUsableCapacity => "scaled by remaining usable capacity",
-            BenefitScaling::Constant => "held constant, i.e. fade is assumed to be handled outside the model",
+            BenefitScaling::Constant =>
+                "held constant, i.e. fade is assumed to be handled outside the model",
         }
     );
 
@@ -574,9 +610,6 @@ mod tests {
         assert!((result.cash_flow[1].gross_savings_usd - 980.0).abs() < 1e-9);
         assert!((result.cash_flow[2].gross_savings_usd - 960.4).abs() < 1e-9);
         assert!((result.final_capacity_retention_pct - 96.04 * 0.98).abs() < 1e-9);
-        assert!(result
-            .degradation_method
-            .contains("not an electrochemical lifetime model"));
 
         // Constant scaling holds the benefit flat, whatever the fade.
         let mut constant = scenario.clone();
@@ -595,6 +628,38 @@ mod tests {
     /// A replacement fires in the first year capacity would start below the trigger.
     /// 10% fade: 100, 90, 81, 72.9, 65.61 — so with a trigger at 70%, year 5 is the
     /// first year that starts below it.
+    #[test]
+    fn fade_compounds_and_year_fifteen_is_the_stated_formula() {
+        let economics = EconomicsSpec {
+            capex_usd: 100_000.0,
+            replacement: None,
+            horizon_years: 15,
+            ..EconomicsSpec::default()
+        };
+        let degradation = DegradationSpec {
+            calendar_fade_pct_per_year: 2.0,
+            cycle_fade_pct_per_cycle: 0.0,
+            ..DegradationSpec::default()
+        };
+        let mut ledger = WarningLedger::new();
+        let result = evaluate(
+            &scenario(economics, degradation),
+            &energy(HOURS_PER_YEAR, 0.0),
+            &cost(90_000.0),
+            &cost(100_000.0),
+            &mut ledger,
+        )
+        .unwrap();
+        // 100 x 0.98^14. A straight line would read 72.
+        let expected = 100.0 * 0.98_f64.powi(14);
+        assert!((expected - 75.36).abs() < 0.01);
+        let year_15 = result.cash_flow[14].capacity_retention_pct;
+        assert!((year_15 - expected).abs() < 1e-9, "{year_15}");
+        // And every text that describes it says so.
+        assert!(result.degradation_method.contains("Compounding"));
+        assert!(!result.degradation_method.to_lowercase().contains("linear"));
+    }
+
     #[test]
     fn replacement_fires_when_capacity_crosses_the_trigger() {
         let mut ledger = WarningLedger::new();

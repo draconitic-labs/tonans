@@ -111,6 +111,10 @@ fn header(html: &mut String, input: &ReportInput<'_>) {
     );
 }
 
+/// What the fade method is not. The report states it wherever it states the method.
+const FADE_LIMIT: &str =
+    "This is a transparent approximation, not an electrochemical lifetime model.";
+
 fn disclaimer_banner(html: &mut String) {
     let _ = writeln!(
         html,
@@ -131,6 +135,11 @@ fn warning_ledger(html: &mut String, warnings: &[Warning]) {
         "<p class=\"muted\">{count} warning(s), most serious first. Nothing here is filtered out for being inconvenient.</p>\n<ul class=\"ledger\">\n",
         count = warnings.len()
     );
+    ledger_items(html, warnings);
+    html.push_str("</ul>\n</section>\n");
+}
+
+fn ledger_items(html: &mut String, warnings: &[Warning]) {
     for warning in warnings {
         // Status colour never carries meaning alone: the severity is spelled out.
         let _ = writeln!(
@@ -142,7 +151,6 @@ fn warning_ledger(html: &mut String, warnings: &[Warning]) {
             message = escape(&warning.message)
         );
     }
-    html.push_str("</ul>\n</section>\n");
 }
 
 fn severity_icon(severity: Severity) -> &'static str {
@@ -244,7 +252,7 @@ fn comparison_table(html: &mut String, run: &RunResult, currency: &str) {
             },
             payback = economics
                 .simple_payback_years
-                .map_or_else(|| "never".to_string(), |y| format!("{y:.1}")),
+                .map_or_else(|| no_payback(economics.capex_usd), |y| format!("{y:.1}")),
         );
     }
     html.push_str("</tbody>\n</table></div>\n</section>\n");
@@ -430,7 +438,7 @@ fn assumptions_table(html: &mut String, scenario: &ScenarioResult, currency: &st
         }
         rows.push((
             "Degradation".into(),
-            scenario.economics.degradation_method.clone(),
+            format!("{} {FADE_LIMIT}", scenario.economics.degradation_method),
         ));
     }
     if !spec.outage.windows.is_empty() {
@@ -870,9 +878,10 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
         npv = money(economics.npv_usd, currency),
         horizon = economics.horizon_years,
         discount = format_number(economics.discount_rate_pct_per_year),
-        payback = economics
-            .simple_payback_years
-            .map_or_else(|| "never".to_string(), |y| format!("{y:.1} years")),
+        payback = economics.simple_payback_years.map_or_else(
+            || no_payback(economics.capex_usd),
+            |y| format!("{y:.1} years")
+        ),
         saving = money(economics.year_one_gross_savings_usd, currency),
         cycles = escape(&format!("{:.1}", economics.equivalent_full_cycles_per_year)),
     );
@@ -885,17 +894,16 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
         );
     }
 
-    html.push_str("<div class=\"scroll\"><table class=\"num-table\">\n<thead><tr><th class=\"num\">Year</th><th class=\"num\">Usable capacity (%)</th><th class=\"num\">Gross saving</th><th class=\"num\">Operating cost</th><th class=\"num\">Throughput cost</th><th class=\"num\">Replacement</th><th class=\"num\">Net cash flow</th><th class=\"num\">Discounted</th><th class=\"num\">Cumulative discounted</th></tr></thead>\n<tbody>\n");
+    html.push_str("<div class=\"scroll\"><table class=\"num-table\">\n<thead><tr><th class=\"num\">Year</th><th class=\"num\">Usable capacity (%)</th><th class=\"num\">Gross saving</th><th class=\"num\">Operating cost</th><th class=\"num\">Throughput cost</th><th class=\"num\">Installed cost</th><th class=\"num\">Replacement</th><th class=\"num\">Net cash flow</th><th class=\"num\">Discounted</th><th class=\"num\">Cumulative discounted</th></tr></thead>\n<tbody>\n");
     let _ = writeln!(
         html,
-        "<tr><td class=\"num\">0</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">{capex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td></tr>",
-        capex = money(economics.capex_usd, currency),
+        "<tr><td class=\"num\">0</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">—</td><td class=\"num\">{negcapex}</td><td class=\"num\">—</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td><td class=\"num\">{negcapex}</td></tr>",
         negcapex = money(-economics.capex_usd, currency)
     );
     for year in &economics.cash_flow {
         let _ = writeln!(
             html,
-            "<tr><td class=\"num\">{year}</td><td class=\"num\">{capacity}</td><td class=\"num\">{gross}</td><td class=\"num\">{opex}</td><td class=\"num\">{throughput}</td><td class=\"num\">{replacement}</td><td class=\"num\">{net}</td><td class=\"num\">{discounted}</td><td class=\"num\">{cumulative}</td></tr>",
+            "<tr><td class=\"num\">{year}</td><td class=\"num\">{capacity}</td><td class=\"num\">{gross}</td><td class=\"num\">{opex}</td><td class=\"num\">{throughput}</td><td class=\"num\">—</td><td class=\"num\">{replacement}</td><td class=\"num\">{net}</td><td class=\"num\">{discounted}</td><td class=\"num\">{cumulative}</td></tr>",
             year = year.year,
             capacity = escape(&format!("{:.1}", year.capacity_retention_pct)),
             gross = money(year.gross_savings_usd, currency),
@@ -914,7 +922,7 @@ fn economics_table(html: &mut String, scenario: &ScenarioResult, currency: &str)
     html.push_str("</tbody>\n</table></div>\n");
     let _ = writeln!(
         html,
-        "<p class=\"muted\">{method} Energy savings escalate at the stated rate; operating and throughput costs are held constant in nominal terms. There is no tax, incentive, depreciation, or residual value in this model — Tonans would have to guess at all four, and a guess in a financial model is worse than an absence.</p>",
+        "<p class=\"muted\">{method} {FADE_LIMIT} Energy savings escalate at the stated rate; operating and throughput costs are held constant in nominal terms. There is no tax, incentive, depreciation, or residual value in this model — Tonans would have to guess at all four, and a guess in a financial model is worse than an absence.</p>",
         method = escape(&economics.degradation_method)
     );
 }
@@ -925,6 +933,14 @@ fn sensitivity_section(html: &mut String, study: &SensitivityResult, currency: &
         "<section class=\"scenario\">\n<h2>Sensitivity — {name}</h2>\n",
         name = escape(&study.scenario_name)
     );
+
+    // A study's own warnings, such as whether installed cost moved with battery size,
+    // change how its numbers read, so they sit above the matrices.
+    if !study.warnings.is_empty() {
+        html.push_str("<ul class=\"ledger\">\n");
+        ledger_items(html, &study.warnings);
+        html.push_str("</ul>\n");
+    }
 
     let rows: Vec<String> = study.axes[0]
         .values
@@ -995,7 +1011,7 @@ fn sensitivity_table(html: &mut String, study: &SensitivityResult, currency: &st
             escape(axis.param.label())
         );
     }
-    html.push_str("<th class=\"num\">Annual grid cost</th><th class=\"num\">Annual saving</th><th class=\"num\">NPV</th><th class=\"num\">Payback (years)</th><th class=\"num\">Peak import (kW)</th><th class=\"num\">Unmet critical (kWh)</th><th class=\"num\">Self-sufficiency (%)</th><th class=\"num\">Lowest SOC (%)</th></tr></thead>\n<tbody>\n");
+    html.push_str("<th class=\"num\">Installed cost</th><th class=\"num\">Annual grid cost</th><th class=\"num\">Annual saving</th><th class=\"num\">NPV</th><th class=\"num\">Payback (years)</th><th class=\"num\">Peak import (kW)</th><th class=\"num\">Unmet critical (kWh)</th><th class=\"num\">Self-sufficiency (%)</th><th class=\"num\">Lowest SOC (%)</th></tr></thead>\n<tbody>\n");
 
     for cell in &study.cells {
         html.push_str("<tr>");
@@ -1009,14 +1025,15 @@ fn sensitivity_table(html: &mut String, study: &SensitivityResult, currency: &st
         let m = &cell.metrics;
         let _ = writeln!(
             html,
-            "<td class=\"num\">{cost}</td><td class=\"num\">{saving}</td><td class=\"num {npv_class}\">{npv}</td><td class=\"num\">{payback}</td><td class=\"num\">{peak}</td><td class=\"num {unmet_class}\">{unmet}</td><td class=\"num\">{sufficiency}</td><td class=\"num\">{soc}</td></tr>",
+            "<td class=\"num\">{installed}</td><td class=\"num\">{cost}</td><td class=\"num\">{saving}</td><td class=\"num {npv_class}\">{npv}</td><td class=\"num\">{payback}</td><td class=\"num\">{peak}</td><td class=\"num {unmet_class}\">{unmet}</td><td class=\"num\">{sufficiency}</td><td class=\"num\">{soc}</td></tr>",
+            installed = money(m.installed_cost_usd, currency),
             cost = money(m.annual_grid_cost_usd, currency),
             saving = money(m.annual_savings_usd, currency),
             npv_class = if m.npv_usd >= 0.0 { "good" } else { "bad" },
             npv = money(m.npv_usd, currency),
             payback = m
                 .simple_payback_years
-                .map_or_else(|| "never".to_string(), |y| format!("{y:.1}")),
+                .map_or_else(|| no_payback(m.installed_cost_usd), |y| format!("{y:.1}")),
             peak = escape(&format_number(m.peak_import_kw)),
             unmet_class = if m.unmet_critical_kwh > 1e-9 { "bad" } else { "" },
             unmet = escape(&format_number(m.unmet_critical_kwh)),
@@ -1168,6 +1185,15 @@ fn footer(html: &mut String, run: &RunResult) {
 // ---------------------------------------------------------------------------
 // Presentation
 // ---------------------------------------------------------------------------
+
+/// Why there is no payback figure. Nothing to repay is not the same as never repaying it.
+fn no_payback(capex_usd: f64) -> String {
+    if capex_usd > 0.0 {
+        "never".to_string()
+    } else {
+        "no capital to repay".to_string()
+    }
+}
 
 fn money(value: f64, currency: &str) -> String {
     let rounded = round_money(value);

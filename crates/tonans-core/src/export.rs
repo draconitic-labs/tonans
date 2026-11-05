@@ -170,7 +170,7 @@ fn write_bundle_into(
         &mut artifacts,
         "report.html",
         report_html.as_bytes(),
-        "Self-contained HTML report. No script, no network access, opens from disk.",
+        "Self-contained HTML report.",
     )?;
 
     let summary = canonical_json(run)?;
@@ -200,7 +200,7 @@ fn write_bundle_into(
             &mut artifacts,
             &name,
             timeseries_csv(scenario).as_bytes(),
-            "Every interval at full resolution. The charts in the report are decimated; this is not.",
+            "Every interval at full resolution.",
         )?;
     }
 
@@ -217,7 +217,7 @@ fn write_bundle_into(
             &name,
             sensitivity_csv(study).as_bytes(),
             &format!(
-                "Every server-computed cell of sensitivity study {} for scenario '{}'.",
+                "Every cell of sensitivity study {} for scenario '{}'.",
                 index + 1,
                 study.scenario_id
             ),
@@ -555,7 +555,8 @@ fn sensitivity_csv(study: &SensitivityResult) -> String {
         let _ = axis;
     }
     out.push_str(concat!(
-        ",annual_grid_cost_usd,annual_savings_usd,npv_usd,simple_payback_years,",
+        ",installed_cost_usd,capex_per_kwh_usd,",
+        "annual_grid_cost_usd,annual_savings_usd,npv_usd,simple_payback_years,",
         "peak_import_kw,grid_import_kwh,unmet_critical_kwh,self_sufficiency_pct,",
         "min_soc_pct,equivalent_full_cycles\n"
     ));
@@ -568,7 +569,9 @@ fn sensitivity_csv(study: &SensitivityResult) -> String {
         let m = &cell.metrics;
         let _ = writeln!(
             out,
-            ",{cost},{saving},{npv},{payback},{peak},{import},{unmet},{sufficiency},{soc},{cycles}",
+            ",{installed},{rate},{cost},{saving},{npv},{payback},{peak},{import},{unmet},{sufficiency},{soc},{cycles}",
+            installed = money(m.installed_cost_usd),
+            rate = study.capex_per_kwh_usd.map_or_else(String::new, number),
             cost = money(m.annual_grid_cost_usd),
             saving = money(m.annual_savings_usd),
             npv = money(m.npv_usd),
@@ -660,6 +663,7 @@ mod tests {
                     param: SensitivityParam::CapexUsd,
                     values: vec![capex],
                 }],
+                capex_per_kwh_usd: None,
             },
         )
         .unwrap()
@@ -826,6 +830,9 @@ mod tests {
             serde_json::from_slice(&fs::read(study_directory.join("provenance.json")).unwrap())
                 .unwrap();
         assert_eq!(provenance.sensitivity_studies.len(), 2);
+        // A study's warnings change how its numbers read, so the report carries them.
+        let report = fs::read_to_string(study_directory.join("report.html")).unwrap();
+        assert!(report.contains("sensitivity.per_cell_simulation"));
         let checksum_lines = fs::read_to_string(study_directory.join("SHA256SUMS.txt"))
             .unwrap()
             .lines()

@@ -1,27 +1,21 @@
-//! Tonans — a local-first deterministic microgrid scenario workbench.
+//! The `tonans` command: Tonans without a window.
 //!
-//! Two ways in:
+//! The product is the native window in `crates/tonans-desktop`. This command is what
+//! remains useful without one:
 //!
-//! * `tonans` launches the loopback server and opens the browser. This is the
-//!   product.
 //! * `tonans run --project <name> --out <dir>` runs a project headlessly and writes
-//!   the full export bundle. This is what the end-to-end test drives, and what a
-//!   user would put in a script.
+//!   the full export bundle. This is what a user would put in a script.
+//! * `tonans` starts the same loopback server the window uses. It never opens a browser,
+//!   and it shows its one-launch link only to a terminal. The packaged-binary smoke test
+//!   drives the HTTP boundary through it, asking for the link with `--print-link`.
 //!
 //! Nothing here talks to the network, phones home, or writes outside the workspace.
 
-mod api;
-mod assets;
-mod clock;
-mod demo;
-mod http;
-mod server;
-mod state;
-mod token;
-
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use tonans_app::{clock, default_workspace, demo, server};
 use tonans_core::error::{Error, Result};
 use tonans_core::export;
 use tonans_core::run;
@@ -31,22 +25,29 @@ use tonans_core::version::{
 };
 
 const HELP: &str = "\
-Tonans — microgrid scenario workbench
+Tonans — microgrid scenario workbench, without a window
 
-  tonans [OPTIONS]                       Launch the application
+  tonans [OPTIONS]                       Start the loopback server
   tonans run --project <NAME> [OPTIONS]  Run a project and write an export bundle
   tonans --version
   tonans --help
 
 Options:
   --workspace <DIR>   Where projects and exports live.
-                      Default: %LOCALAPPDATA%\\Flintglade\\Tonans
+                      Default: a folder for this user, Flintglade/Tonans under
+                      %LOCALAPPDATA% on Windows and under $XDG_DATA_HOME or
+                      ~/.local/share elsewhere.
   --port <PORT>       Loopback port. Default: 0, meaning the operating system
                       chooses one, which keeps it from being a fixed target.
-  --no-browser        Do not open a browser; just print the URL.
+  --print-link        Print the link with its one-launch token even when output is
+                      being captured. Without this it goes only to a terminal. Whatever
+                      captures it can drive the application until the server stops.
+  --no-browser        Accepted for older scripts. This command never opens a browser.
   --project <NAME>    (run) The project to run.
   --out <DIR>         (run) Where to write the bundle. Default: the workspace's
                       exports directory.
+
+For the application itself, run tonans-desktop, which opens a native window.
 
 Tonans binds only to 127.0.0.1, serves only assets compiled into this binary, and
 sends nothing anywhere. Results are planning estimates for human review.
@@ -80,7 +81,7 @@ fn dispatch() -> Result<()> {
     let workspace = Workspace::open(args.workspace()?)?;
 
     match args.command {
-        Command::Serve => serve(workspace, args.port, args.no_browser),
+        Command::Serve => serve(workspace, args.port, args.print_link),
         Command::Run => headless(workspace, args.project, args.out),
     }
 }
@@ -89,7 +90,16 @@ fn dispatch() -> Result<()> {
 // Launch
 // ---------------------------------------------------------------------------
 
-fn serve(workspace: Workspace, port: u16, no_browser: bool) -> Result<()> {
+/// Whether to print the link that carries the launch token.
+///
+/// The token grants control of the application, so it should not land in a log, a
+/// service journal, or a CI transcript just because this command's output went there.
+/// A terminal is a person reading it; anywhere else has to ask.
+const fn show_link(stdout_is_terminal: bool, asked: bool) -> bool {
+    stdout_is_terminal || asked
+}
+
+fn serve(workspace: Workspace, port: u16, print_link: bool) -> Result<()> {
     // The demonstration project is installed on first launch by importing the embedded
     // sample CSV through the real importer. It is not a fixture smuggled in through a
     // side door: if the importer would reject it, the demo does not exist.
@@ -100,40 +110,19 @@ fn serve(workspace: Workspace, port: u16, no_browser: bool) -> Result<()> {
     println!("{PRODUCT_NAME} {APP_VERSION} (model {MODEL_VERSION})");
     println!("  workspace: {}", server.state.workspace.root().display());
     println!();
-    println!("  Open this link. It carries the one-launch token; without it the API refuses.");
-    println!("  {}", server.url);
+    if show_link(std::io::stdout().is_terminal(), print_link) {
+        println!("  This link carries the one-launch token; without it the API refuses.");
+        println!("  {}", server.url);
+    } else {
+        println!("  Listening on http://{}/", server.address);
+        println!("  The link with its one-launch token goes only to a terminal, and this");
+        println!("  output is being captured. Run this in a terminal to see it, or use the");
+        println!("  desktop app, tonans-desktop.");
+    }
     println!();
     println!("  Bound to loopback only. Nothing is sent anywhere. Press Ctrl+C to stop.");
 
-    if !no_browser {
-        open_browser(&server.url);
-    }
     server.serve()
-}
-
-/// Ask the desktop to open a URL.
-///
-/// Windows only for now, and deliberately not clever: `cmd /C start` with an empty
-/// window title, and the URL passed as a separate argument rather than interpolated
-/// into a command line. The URL contains the launch token, so it must not be logged
-/// or handed to a shell that might.
-fn open_browser(url: &str) {
-    #[cfg(windows)]
-    {
-        // `start` treats its first quoted argument as a window title, hence the "".
-        let launched = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn();
-        if launched.is_err() {
-            eprintln!("tonans: could not open a browser. Open the link above yourself.");
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // Tonans ships for Windows. On anything else, print and let the user click.
-        let _ = url;
-        eprintln!("tonans: automatic browser launch is Windows-only. Open the link above.");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +209,7 @@ struct Args {
     command: Command,
     workspace: Option<PathBuf>,
     port: u16,
-    no_browser: bool,
+    print_link: bool,
     project: Option<String>,
     out: Option<PathBuf>,
     help: bool,
@@ -238,7 +227,7 @@ impl Args {
             command: Command::Serve,
             workspace: None,
             port: 0,
-            no_browser: false,
+            print_link: false,
             project: None,
             out: None,
             help: false,
@@ -264,7 +253,10 @@ impl Args {
             match arg.as_str() {
                 "--help" | "-h" => parsed.help = true,
                 "--version" | "-V" => parsed.version = true,
-                "--no-browser" => parsed.no_browser = true,
+                // Older scripts pass this. The command never opens a browser now, so
+                // there is nothing left for it to suppress.
+                "--no-browser" => {}
+                "--print-link" => parsed.print_link = true,
                 "--workspace" => parsed.workspace = Some(PathBuf::from(value()?)),
                 "--out" => parsed.out = Some(PathBuf::from(value()?)),
                 "--project" => parsed.project = Some(value()?),
@@ -290,30 +282,12 @@ impl Args {
         Ok(parsed)
     }
 
-    /// Where the workspace lives.
-    ///
-    /// Defaults under `%LOCALAPPDATA%`, which is per-user and not roamed. The path is
-    /// *derived from the environment at runtime*: no user's home directory is ever
-    /// compiled into the binary.
+    /// Where the workspace lives: the explicit flag, or the per-user default.
     fn workspace(&self) -> Result<PathBuf> {
-        if let Some(explicit) = &self.workspace {
-            return Ok(explicit.clone());
+        match &self.workspace {
+            Some(explicit) => Ok(explicit.clone()),
+            None => default_workspace(),
         }
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local/share"))
-            })
-            .ok_or(Error::UnsafePath {
-                code: "path.no_data_directory",
-                message:
-                    "Tonans could not work out where to store projects. Pass --workspace <DIR>."
-                        .to_string(),
-            })?;
-        Ok(base.join("Flintglade").join("Tonans"))
     }
 }
 
@@ -333,7 +307,6 @@ mod tests {
             args.port, 0,
             "the port must default to 0 so the kernel picks one"
         );
-        assert!(!args.no_browser);
     }
 
     #[test]
@@ -347,7 +320,6 @@ mod tests {
     #[test]
     fn flags_are_parsed_and_unknown_ones_are_refused() {
         let args = parse(&["--no-browser", "--port", "8080", "--workspace", "W"]).unwrap();
-        assert!(args.no_browser);
         assert_eq!(args.port, 8080);
         assert_eq!(args.workspace, Some(PathBuf::from("W")));
 
@@ -383,5 +355,27 @@ mod tests {
         assert!(HELP.contains("planning estimates"));
         assert!(HELP.contains("127.0.0.1"));
         assert!(HELP.contains("support@flintglade.com"));
+    }
+
+    #[test]
+    fn the_link_goes_only_to_a_terminal_unless_someone_asks() {
+        assert!(show_link(true, false));
+        assert!(
+            !show_link(false, false),
+            "captured output must not get the token"
+        );
+        assert!(show_link(false, true));
+        assert!(show_link(true, true));
+        assert!(!parse(&[]).unwrap().print_link, "off by default");
+        assert!(parse(&["--print-link"]).unwrap().print_link);
+    }
+
+    #[test]
+    fn this_command_never_starts_another_program() {
+        // The point of the native window: nothing in this binary may launch a browser.
+        // It spawns no process of any kind.
+        let source = include_str!("main.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        assert!(!code.contains("process::Command"));
     }
 }

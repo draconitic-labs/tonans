@@ -2,13 +2,13 @@
 
 ## Product boundary
 
-**Tonans - Microgrid Scenario Workbench** is a local Windows application for
+**Tonans - Microgrid Scenario Workbench** is a local desktop application for
 comparing battery-storage and microgrid planning scenarios. It performs deterministic
 single-bus energy accounting. It does not calculate AC power flow, short-circuit
 duty, protection coordination, conductor sizing, interconnection compliance,
 real-time dispatch, or device commands.
 
-Every screen and report must identify results as planning estimates for human
+Help and every report must identify results as planning estimates for human
 review, not stamped designs or guaranteed savings.
 
 ## Required workflow
@@ -79,6 +79,6 @@ beyond the Apache License 2.0.
 - Formatting, lint, tests, dependency audit, production build,
   signed-or-explicitly-unsigned status, SBOM, notices, checksums, binary/package scan,
   and fresh-context review all recorded against the final integrated artifact.
-- The Windows release candidate is locally launchable from a desktop shortcut but
-  remains unpublished until the final integrated gates pass. Independent review by a
+- The Windows release candidate runs locally from a command prompt in the unpacked folder,
+  and remains unpublished until the final integrated gates pass. Independent review by a
   qualified energy analyst is recommended.

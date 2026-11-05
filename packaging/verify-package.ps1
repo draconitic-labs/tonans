@@ -244,11 +244,14 @@ try {
         # every origin in it must belong to a licence steward. A Flintglade-controlled
         # origin appearing here would be smuggling exactly what that exemption exists
         # to permit.
-        $stewards = @('apache.org', 'opensource.org', 'unlicense.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org')
+        $stewards = @('apache.org', 'opensource.org', 'unlicense.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org', 'sil.org')
         $offenders = @()
         $content = Get-Content (Join-Path $work 'NOTICES.md') -Raw
         foreach ($m in [regex]::Matches($content, 'https?://([^/\s)"''>`]+)')) {
             $originHost = $m.Groups[1].Value
+            # Barlow's copyright line names its authors' repository. A licence's copyright
+            # statement must stay verbatim, so that one exact address is allowed.
+            if ($m.Value -eq 'https://github.com/jpt/barlow') { continue }
             $known = $false
             foreach ($steward in $stewards) { if ($originHost -like "*$steward") { $known = $true } }
             if (-not $known) { $offenders += $m.Value }

@@ -26,27 +26,120 @@ $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 
 ## Pending before a binary release
 
-### Browser walkthrough
+### Walkthrough
 
-Launch the final staged executable and drive the actual DOM workflow:
+Launch the final build in its native window and drive the actual interface with real
+input, never a browser:
 
 ```text
-import -> configure -> run -> compare -> sensitivity -> export -> reopen
+import -> configure -> run -> compare -> sensitivity -> export -> quit -> relaunch -> reopen
 ```
 
-Automated tests and the packaged-binary smoke exercise the HTTP boundary and model
-path, but they do not drive the browser DOM. Confirm visible units, warnings,
-source-flow metrics, assumption text, sensitivity results, export links, and project
-reopening. Record the tested package digest when this passes.
+Automated tests and the packaged-binary smoke exercise the HTTP boundary and model path,
+but they do not drive the interface. Confirm visible units, warnings, source-flow metrics,
+assumption text, sensitivity results, saved exports, and project reopening. Record the
+tested package digest when this passes.
 
-Passed 2026-11-03 against a Linux release build of this source, not the Windows package,
-using `samples/riverside-works-2024.csv` in real Chrome, driven by an AI agent through the
-page: all eight columns mapped in the import form, 8,760 intervals imported, three scenarios
-added and saved, four scenarios compared, a 12-cell sensitivity grid run, and a bundle
-exported whose files all pass `SHA256SUMS.txt`, with no script in `report.html`. After
-stopping the server from the UI and restarting, the reopened project reproduced model input
-hash `e20536dfda6e` and project hash `5f98a2f9428a`. No package digest applies to this source
-build. Rerun the walkthrough against the staged Windows package and record its digest before
+Passed 2026-11-04 on Linux in the Tauri window (WebKitGTK 2.54), against source revision
+`cdc8bd7` and a release binary with SHA-256 `b8fb5b480ffac3ac...`. It was run on a
+virtual X display, with no session bus and no window manager, and driven by an AI agent using
+`xdotool` keystrokes and clicks and checking screenshots, at 1600x950 and 1280x720, in light
+and dark. Every pass started from a clean launch, with the display checked to hold no other
+program's window. The second window below was opened on purpose.
+
+Walked again on the same setup, at 1600x950, at source revision `488ffd9` with a release binary
+of SHA-256 `fdf9bdc23f4b14ef...`, once the commentary was out of the window: the empty state, every
+screen from a clean launch, each dispatch policy and add-scenario template, a study on an energy
+axis and one on a price axis, which showed no best-cell panel, and an export. A file with `P_Load_kW`,
+`Gen_MW`, `Export Credit per kWh` holding 0 overnight and 8.5 later, `Retail Price (c/kWh)`,
+`OA Temp (°F)`, and `Critical Power (kW)` got all its columns suggested, with a Check on the three
+that need one, and its export credit tile read 0.000 to 0.085 USD/kWh. `Feed-in Rate per kWh` holding
+1.2 to 1.8 got its role and no unit. A project file put back while the window kept focus saved with
+no dialog. After Reopen failed on a corrupted file, moving the file away and pressing Save wrote the
+edits. The bundled demo's model input and results hashes did not move.
+
+- **Import:** `samples/riverside-works-2024.csv` through the native file picker. The
+  explicit suggestion mapped 8 of 8 columns, flagged two prices whose currency the file does
+  not state, and held the import until the review box was ticked. Importing with nothing
+  mapped was refused. A wrong interval was refused on screen, and the same file imported
+  once corrected, without choosing it again. The sample-data path marked the project as
+  synthetic on screen and in the warning ledger, and the CSV template was saved through the
+  native dialog.
+- **File intake:** a 3 GiB sparse file and a 70 MB file were refused from their size, giving the
+  64 MiB limit, with memory flat. Files named with an en dash, CJK, and an umlaut were accepted.
+  A file with `Non_Critical_Load_kW`, `Load_kWh/h`, `Price (A$/kWh)`, `Solar_Irradiance_W/m2`,
+  `Battery_Temp_C`, and `Price_BRL_per_kWh` got no suggestion for any of them, with a note saying
+  why for each, and its plain `Load (kW)` and `PV Power (kW)` columns were still recognized. A
+  103-character file name was accepted. Text typed while an import ran stayed on screen as unsaved,
+  and the Import button was disabled until it finished.
+- **Configure:** scenarios added from the battery-sizes, peak-shaving, backup-first, surplus,
+  and blank-copy templates; imported prices applied to every scenario; tariff presets, including
+  Flat energy price clearing a demand charge; a derating table edited, and a manual schedule
+  window added and filled in; a replacement edited; an outage window edited through the date
+  popup, labelled, and copied to every scenario; duplicate, remove, change of baseline, undo, and
+  redo, by button and by key, with undo restoring the selected scenario. A blank number and `1e`
+  in the export limit were refused rather than read as 0 or unlimited, and an empty outage window
+  was refused with the edits kept. Switching project over unsaved edits asked first, a save that
+  failed in that dialog said why and stayed put, and discarding left the project on disk unchanged.
+- **Run and compare:** five scenarios, 8,760 intervals, and a 105,120-interval file with four
+  scenarios. Year 0 of the cash flow table shows installed cost in its own column, and the annual
+  tile says when it is scaled from a short file. The same year starting on January 1, starting on
+  July 15, and stamped in UTC for a New York site raised nothing, then billed 13 months and said so,
+  on screen, in the report, and in `provenance.json` and `summary.json`. A battery with no capital
+  cost read "No capital to repay" in the comparison, the heat table, and the report. The bundled demo, run through `tonans run`, gave
+  model input `97029af07baaf314...` and results `b9512228beb1b6a1...` at model 1.2.0. A build of
+  `main` at 1.1.1 gives `4e25a00008c5ccdc...` and `65b99cea6ef175ec...`, and this source with its
+  model version set back to 1.1.1 gives exactly those. No number in `summary.json` differs from
+  `main`, and the timeseries and scenario CSVs are byte-identical. `summary.json` and the report
+  also differ in the fade wording, and the report in its cash flow table's new column.
+- **Sensitivity:** a 9-cell grid and a 12-cell grid with installed cost moving at 550 USD per
+  kWh, with the best cell marked as the best of those tested. An unreadable axis value was
+  refused, and a cell was added as a scenario and undone. With the form already open, changing
+  installed cost from 220,000 to 440,000 USD moved the rate to 1,100, and the study's cell at
+  400 kWh / 150 kW read -448,355 USD, as Results did. Import-price and demand-price axes gave
+  the values in `CHANGELOG.md`, stated 0.8 exactly, and offered no cell as a scenario. Removing the
+  study's scenario left the form working, on another scenario.
+- **Late answers:** on the 105,120-interval file, a run, a 256-cell study, and an export each
+  finished after opening another project, and after saving a change. Each was dropped with a
+  message, or for an export, said where the bundle went, and nothing was marked Current.
+- **One heavy job:** Run on that file, open another project, Run: the second was told what was
+  running, and its button came back when that finished. The application peaked at 2.7 GB and read
+  under 700 MB after runs and 2.4 GB after an export. Over HTTP under a 6 GiB address-space limit,
+  three overlapping runs answered 200, 409, 409, and the process survived.
+- **When the file changes underneath:** a Reopen that could not read a corrupted file kept the edits,
+  still unsaved, with Save enabled, and the reason stayed on screen. Further typing and a Save after
+  restoring the file put all of it on disk. A project whose file was moved away said so, and Save
+  wrote it back. A save that had not yet been told got a dialog and wrote nothing, and leaving asked
+  first. A read-only project file refused the save with a clear message, and it worked once writable.
+- **Two windows on one workspace:** the first window said its project had changed elsewhere when it
+  got focus. Saving from it was refused with a dialog, the other window's import stayed on disk,
+  Enter kept the edits on screen, and reopening showed the import. Results overtaken this way read
+  Out of date.
+- **Export:** a bundle of 11 files. One file was saved through the native save dialog and
+  the whole bundle through the native folder dialog. All 10 listed files passed
+  `sha256sum -c` on `SHA256SUMS.txt`, and `report.html` holds no script. With a study and unsaved
+  edits, the page and a dialog said saving would leave the study out, and the bundle did. Saving over
+  a 0600 file kept its mode, and saving over a link wrote through it and left it a link.
+- **Quit and reopen:** Quit, and a window-close message, both asked first over unsaved edits. Enter and
+  Escape kept the work from both, and only a click on Quit without saving discarded it. After quitting
+  and relaunching, the reopened project gave identical hashes: results `67fa5611b21f4c3f...`, model
+  input `0f4be9472fda11cf...`, project `6eacdf850cfb6795...`.
+
+Not covered by this record:
+
+- **Windows was not walked through.** No Windows build has been run, and no package digest
+  applies to this source build. What Enter and Escape do in the quit dialog there comes from
+  reading the dialog library.
+- Wayland and a real compositor were not exercised: the frames went to a virtual display, and
+  that hides renderer problems. The WebKit settings for the NVIDIA driver are unit-tested only.
+- With no session bus, Show in file manager took its fallback of opening the folder, so the
+  desktop's file-manager service was not exercised. Links reached a stand-in for `xdg-open`,
+  so no real handler ran.
+- `scripts/install-desktop.sh` has not been run. Its file-recognition functions were
+  exercised against a scratch home folder.
+- HiDPI, assistive technology, and keyboard-only use were not walked through.
+
+Rerun the walkthrough against the staged Windows package and record its digest before
 publishing a binary.
 
 ### Final integrated gate rerun
@@ -83,9 +176,22 @@ maintainer endorsement, or evidence of full SAM/SSC parity.
 ```powershell
 cargo +stable-x86_64-pc-windows-gnullvm fmt --all -- --check
 cargo +stable-x86_64-pc-windows-gnullvm clippy `
-  --workspace --all-targets --locked -- -D warnings
+  -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
 cargo +stable-x86_64-pc-windows-gnullvm test `
-  --workspace --all-targets --locked
+  -p tonans-core -p tonans-app --all-targets --locked
+```
+
+The package holds the `tonans` command, so these name its crates. The desktop shell is
+gated separately in CI. Formatting and Clippy run with `--workspace` on Ubuntu and on the
+default Windows target. Tests run with `--workspace` on Ubuntu. On Windows they run with
+`--exclude tonans-desktop`, because the shell's test binary has no application manifest and
+cannot load there; its tests are platform-neutral, and the release build still covers the
+binary.
+
+The page's own rules are tested under Node, with nothing else installed:
+
+```sh
+node --test crates/tonans-app/ui-tests/logic.test.mjs
 ```
 
 These gates have passed during the hardening cycle and must pass again after
@@ -112,11 +218,22 @@ durable evidence; the count will legitimately grow as regressions are added.
 ### Dependency audit
 
 ```powershell
-cargo audit
+cargo audit --deny warnings
 ```
 
 Audit the locked tree. Any advisory is dispositioned explicitly; compatibility pins
-are not blanket exceptions.
+are not blanket exceptions. CI uses the same command, so a new warning fails the job.
+`.cargo/audit.toml` holds the list below, and nothing else may be added to it without a row
+here. Each of these comes from a stack the Tauri version pins, so check them again whenever
+Tauri moves.
+
+| Advisory | Crate | What it is | Why it is accepted for now |
+|---|---|---|---|
+| RUSTSEC-2024-0429 | glib 0.18.5 | Unsound `VariantStrIter` | Fixed in glib 0.20, but gtk 0.18 under Tauri holds it at 0.18. Tonans calls only `glib::set_prgname`, and no other crate in the locked tree names `VariantStrIter` or `array_iter_str` (searched 2026-11-04). |
+| RUSTSEC-2024-0370 | proc-macro-error 1.0.4 | Unmaintained | Used only at compile time through glib-macros and gtk3-macros. Not in the binary. |
+| RUSTSEC-2026-0370 | zvariant 5.15.1 | Unmaintained, merged into zbus 6 | No patched release. Linux only, through zbus 5 under tauri-plugin-opener, for the one call asking the local file manager to show a folder. |
+| RUSTSEC-2026-0371 | zbus_names 4.3.5 | Unmaintained, merged into zbus 6 | As above. |
+| RUSTSEC-2026-0372 | zvariant_derive 5.15.1 | Unmaintained, merged into zbus 6 | As above, at compile time. |
 
 ### Production package
 
@@ -181,8 +298,8 @@ integrity evidence, not publisher authentication.
 ## Final release sequence
 
 1. Verify the archive digest and extract it.
-2. Complete the browser walkthrough above using the exact staged package.
-3. Confirm the boundary text, assumptions, units, warnings, and exports are readable.
+2. Complete the walkthrough above using the exact staged package.
+3. Confirm the boundary text under Help, assumptions, units, warnings, and exports are readable.
 4. Record the package digest and outcome.
 5. Keep the binary unpublished until every final integrated gate and the walkthrough
    are closed.
