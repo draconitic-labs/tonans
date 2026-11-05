@@ -702,7 +702,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_project_whose_file_has_gone_can_be_saved_once_it_says_it_knows() {
         let (workspace, root) = revision_workspace("gone");
@@ -775,6 +774,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_chosen_file_keeps_its_permissions_and_a_link_stays_a_link() {
         use std::os::unix::fs::{symlink, PermissionsExt};
