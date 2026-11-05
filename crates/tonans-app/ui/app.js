@@ -917,6 +917,25 @@ function firstInvalidField() {
   return document.querySelector('.view:not(.hidden) input[aria-invalid="true"]');
 }
 
+/**
+ * A save the user knows is writing the file back says so, or it would be told again. The file
+ * may have come back since this window last looked, so it looks again: the same bytes then save
+ * normally, and different bytes are refused as a change.
+ */
+async function revisionToSave(stamp) {
+  if (!state.projectMissing) return stamp.revision;
+  try {
+    await api(projectPath('/revision'));
+  } catch (error) {
+    if (error.code === 'schema.project_not_found') return 'gone';
+    throw error;
+  }
+  state.projectMissing = false;
+  syncUnsaved();
+  redrawForChange();
+  return stamp.revision;
+}
+
 /** One save at a time: a second would carry a revision the first is about to replace. */
 function saveProject() {
   if (!state.saving) state.saving = writeProject().finally(() => { state.saving = null; });
@@ -936,12 +955,8 @@ async function writeProject() {
   const sent = editableJson();
   let reply;
   try {
-    // A save the user knows is writing the file back says so. Otherwise it would be told again.
-    reply = await request(projectPath(), {
-      method: 'PUT',
-      body: state.project,
-      revision: state.projectMissing ? 'gone' : stamp.revision,
-    });
+    const revision = await revisionToSave(stamp);
+    reply = await request(projectPath(), { method: 'PUT', body: state.project, revision });
   } catch (error) {
     // Point at the scenario the error names, rather than leaving the reader to hunt.
     const named = /scenario\[([^\]]+)\]/.exec(error.message);
