@@ -1165,7 +1165,11 @@ fn header_tokens(header: &str) -> Vec<String> {
         .replace('€', " eur ")
         .replace('£', " gbp ")
         .replace('¥', " jpy ")
-        .replace('₹', " inr ");
+        .replace('₹', " inr ")
+        .replace('º', " ")
+        .replace('℃', " C ")
+        .replace('℉', " F ")
+        .replace('㎾', " kW ");
     let mut tokens = Vec::new();
     for raw in spaced.split(|c: char| !c.is_alphanumeric()) {
         // A whole word that is a unit stays whole: `kWH` is not `k` and `WH`.
@@ -1186,9 +1190,10 @@ fn header_tokens(header: &str) -> Vec<String> {
 
 /// The header's words, lowercased. `Load (kW)`, `load_kW`, `loadKw`, `kWLoad` and `LoadkW`
 /// all give `load` and `kw`. Spelled-out energy units become one word: `kilowatt hours`,
-/// `kW-hr`, and `kWhr` are all `kwh`. So does a feed-in: `Feed-in`, `Feed In`, and `FeedIn` are
-/// all `feedin`, and `in` means nothing else here.
-fn header_words(tokens: &[String]) -> Vec<String> {
+/// `kW-hr`, `kW-h`, and `kWhr` are all `kwh`, while `kW/h` is not an amount of energy. So does a
+/// feed-in: `Feed-in`, `Feed In`, and `FeedIn` are all `feedin`, and `in` means nothing else here.
+fn header_words(header: &str, tokens: &[String]) -> Vec<String> {
+    let per_hour = header.to_lowercase().contains("/h");
     let mut words: Vec<String> = Vec::with_capacity(tokens.len());
     for token in tokens {
         let lower = token.to_lowercase();
@@ -1202,7 +1207,7 @@ fn header_words(tokens: &[String]) -> Vec<String> {
             words.push("tariff".to_string());
             continue;
         }
-        if matches!(lower.as_str(), "hr" | "hrs" | "hour" | "hours") {
+        if matches!(lower.as_str(), "hr" | "hrs" | "hour" | "hours") || (lower == "h" && !per_hour) {
             let energy = match words.last().map(String::as_str) {
                 Some("kw" | "kilowatt" | "kilowatts") => Some("kwh"),
                 Some("w" | "watt" | "watts") => Some("wh"),
@@ -1276,12 +1281,27 @@ const COLUMN_QUALIFIERS: [&str; 15] = [
 /// Words that say a column is the site's load.
 const LOAD_WORDS: [&str; 5] = ["load", "loads", "consumption", "usage", "demand"];
 
+/// Words that name where a whole load is measured, and leave it the load. `HVAC` and `Lighting`
+/// are not here: each is part of a load, and mapping one as the load would drop the rest.
+const LOAD_QUALIFIERS: [&str; 9] = [
+    "profile",
+    "house",
+    "home",
+    "household",
+    "bldg",
+    "campus",
+    "feeder",
+    "bus",
+    "transformer",
+];
+
 /// Words that narrow a load to the part that must stay on in an outage.
 const CRITICAL_WORDS: [&str; 2] = ["critical", "essential"];
 
 /// Words that say a column is on-site generation. `generator` is not one: it may be a machine
 /// that runs only when called on, which is not output that simply arrives.
-const GENERATION_WORDS: [&str; 8] = [
+const GENERATION_WORDS: [&str; 9] = [
+    "gen",
     "pv",
     "solar",
     "photovoltaic",
@@ -1293,8 +1313,9 @@ const GENERATION_WORDS: [&str; 8] = [
 ];
 
 /// Words that qualify generation without changing what it measures.
-const GENERATION_QUALIFIERS: [&str; 7] = [
+const GENERATION_QUALIFIERS: [&str; 8] = [
     "output",
+    "yield",
     "production",
     "produced",
     "array",
@@ -1335,9 +1356,11 @@ const UNREAD_POWER_UNIT_WORDS: [&str; 7] = ["mwh", "gw", "gwh", "kva", "kvah", "
 const TEMPERATURE_WORDS: [&str; 5] = ["temperature", "temp", "ambient", "oat", "drybulb"];
 
 /// Everything else a temperature header may say, including its unit.
-const TEMPERATURE_QUALIFIERS: [&str; 18] = [
+const TEMPERATURE_QUALIFIERS: [&str; 21] = [
     "outdoor",
     "outside",
+    "oa",
+    "amb",
     "air",
     "dry",
     "bulb",
@@ -1350,10 +1373,25 @@ const TEMPERATURE_QUALIFIERS: [&str; 18] = [
     "degrees",
     "c",
     "celsius",
+    "centigrade",
     "degc",
     "f",
     "fahrenheit",
     "degf",
+];
+
+/// The temperature words that state a unit.
+const TEMPERATURE_UNIT_WORDS: [&str; 10] = [
+    "c",
+    "celsius",
+    "centigrade",
+    "degc",
+    "f",
+    "fahrenheit",
+    "degf",
+    "deg",
+    "degree",
+    "degrees",
 ];
 
 /// Words that say a column labels the demand-charge period.
@@ -1366,7 +1404,9 @@ const PERIOD_QUALIFIERS: [&str; 8] = [
 
 /// Words that name a price. `cost` and `credit` also name amounts of money, so those two need an
 /// explicit `per` or `/` as well.
-const PRICE_WORDS: [&str; 7] = ["price", "prices", "rate", "tariff", "cost", "credit", "lmp"];
+const PRICE_WORDS: [&str; 8] = [
+    "price", "prices", "rate", "tariff", "cost", "credit", "lmp", "lbmp",
+];
 
 /// Words that say a price is for energy bought.
 const IMPORT_WORDS: [&str; 6] = [
@@ -1384,7 +1424,14 @@ const EXPORT_WORDS: [&str; 8] = [
 ];
 
 /// Everything else a price header may say, including the money and the energy.
-const PRICE_QUALIFIERS: [&str; 13] = [
+const PRICE_QUALIFIERS: [&str; 20] = [
+    "spot",
+    "wholesale",
+    "market",
+    "tou",
+    "period",
+    "usage",
+    "metering",
     "us",
     "energy",
     "electricity",
@@ -1545,7 +1592,8 @@ fn foreign_dollar(header: &str) -> Option<(String, Option<&'static str>)> {
 }
 
 /// The words of a header with any statement of how long an interval is taken out, which says
-/// nothing about what the column measures: `15min`, `15 min`, `hourly`, `per interval`.
+/// nothing about what the column measures: `15min`, `15 min`, `hourly`, `per interval`. The `in`
+/// of `Load in kW` goes too, when a unit follows it.
 fn without_interval_phrases(words: &[String]) -> Vec<&str> {
     let is_minutes = |word: &str| matches!(word, "min" | "mins" | "minute" | "minutes");
     let is_number = |word: &str| !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
@@ -1560,6 +1608,10 @@ fn without_interval_phrases(words: &[String]) -> Vec<&str> {
             index += 2;
             continue;
         }
+        if word == "in" && next.is_some_and(is_unit_word) {
+            index += 1;
+            continue;
+        }
         let digits = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
         if matches!(word, "hourly" | "interval")
             || (!digits.is_empty() && is_number(digits) && is_minutes(&word[digits.len()..]))
@@ -1571,6 +1623,14 @@ fn without_interval_phrases(words: &[String]) -> Vec<&str> {
         index += 1;
     }
     kept
+}
+
+/// Whether a word states a unit, of power, energy, temperature, or money.
+fn is_unit_word(word: &str) -> bool {
+    POWER_UNIT_WORDS.contains(&word)
+        || UNREAD_POWER_UNIT_WORDS.contains(&word)
+        || TEMPERATURE_UNIT_WORDS.contains(&word)
+        || matches!(word, "usd" | "dollars" | "cents" | "mwh")
 }
 
 /// The first word that is on none of the lists.
@@ -1596,7 +1656,7 @@ fn classify_column(
     samples: &[&str],
 ) -> std::result::Result<ColumnSuggestion, String> {
     let tokens = header_tokens(header);
-    let words = header_words(&tokens);
+    let words = header_words(header, &tokens);
     let core = without_interval_phrases(&words);
     let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
     let shown = header.trim();
@@ -1652,7 +1712,11 @@ fn classify_column(
         ));
     }
 
-    if has(&PRICE_WORDS) || has(&MONEY_MARKS) || has(&CURRENCY_MARKS) {
+    if has(&PRICE_WORDS)
+        || has(&MONEY_MARKS)
+        || has(&CURRENCY_MARKS)
+        || cents_word(header, &words).is_some()
+    {
         return classify_price(header, &words, samples, not_numbers)
             .map(|(role, unit, reason, check)| suggestion(role, unit, reason, check));
     }
@@ -1670,7 +1734,7 @@ fn classify_column(
                 as_written(header, word)
             ));
         }
-        let celsius = has(&["c", "celsius", "degc"]);
+        let celsius = has(&["c", "celsius", "centigrade", "degc"]);
         let fahrenheit = has(&["f", "fahrenheit", "degf"]);
         let unit = match (celsius, fahrenheit) {
             (true, false) => ImportUnit::Celsius,
@@ -1693,7 +1757,8 @@ fn classify_column(
         ));
     }
 
-    let names_load = has(&LOAD_WORDS);
+    // `Critical Power` is a load by another name. Plain `Power` says nothing.
+    let names_load = has(&LOAD_WORDS) || (has(&CRITICAL_WORDS) && has(&["power"]));
     let names_generation = has(&GENERATION_WORDS);
     if !names_load && !names_generation {
         return Err(format!(
@@ -1721,6 +1786,16 @@ fn classify_column(
              if you know which it is, or ignore it."
         ));
     }
+    // `P` is the symbol for active power, as in `P_Load_kW`. After a unit, as in `kW(p)`, it is a
+    // peak rating, which is not what a column measures.
+    let core: Vec<&str> = core
+        .iter()
+        .enumerate()
+        .filter(|(at, word)| {
+            **word != "p" || (*at > 0 && POWER_UNIT_WORDS.contains(&core[*at - 1]))
+        })
+        .map(|(_, word)| *word)
+        .collect();
     let unknown = if names_generation {
         first_unknown(
             &core,
@@ -1737,6 +1812,7 @@ fn classify_column(
             &core,
             &[
                 &LOAD_WORDS,
+                &LOAD_QUALIFIERS,
                 &CRITICAL_WORDS,
                 &COLUMN_QUALIFIERS,
                 &POWER_UNIT_WORDS,
@@ -1786,11 +1862,16 @@ fn classify_column(
          billing figure."
             .to_string()
     });
+    let gen = (role == "generation" && has(&["gen"])).then(|| {
+        "'Gen' is read as on-site generation. Check it is not a generator that runs only when \
+         called on."
+            .to_string()
+    });
     Ok(suggestion(
         role,
         Some(unit),
         format!("The header '{shown}' names {phrase}, in {}.", unit.label()),
-        join_checks([unit_check, rising, demand]),
+        join_checks([unit_check, rising, demand, gen]),
     ))
 }
 
@@ -1857,7 +1938,15 @@ fn classify_price(
 ) -> std::result::Result<PriceReading, String> {
     let has = |options: &[&str]| words.iter().any(|word| options.contains(&word.as_str()));
     let shown = header.trim();
-    let core: Vec<&str> = words.iter().map(String::as_str).collect();
+    let written_cents = cents_word(header, words);
+    let mut core = without_interval_phrases(words);
+    // `c` means cents only right before `/kWh`, and `net` is a word here only in `net metering`.
+    core.retain(|word| Some(*word) != written_cents);
+    if let Some(at) = core.iter().position(|word| *word == "metering") {
+        if at > 0 && core[at - 1] == "net" {
+            core.remove(at - 1);
+        }
+    }
 
     if let Some((_, name)) = OTHER_CURRENCIES.iter().find(|(word, _)| has(&[*word])) {
         return Err(format!(
@@ -1924,7 +2013,7 @@ fn classify_price(
     }
 
     let dollars = has(&["usd", "dollar", "dollars"]);
-    let cents = has(&["cents"]);
+    let cents = has(&["cents"]) || written_cents.is_some();
     let (unit, unit_check) = if has(&["mwh"]) {
         if !dollars || cents {
             return Err(format!(
@@ -1933,6 +2022,14 @@ fn classify_price(
             ));
         }
         (Some(ImportUnit::UsdPerMegawattHour), None)
+    } else if let Some(word) = written_cents {
+        // `c` and `ct` are cents, of a currency they do not name.
+        (
+            Some(ImportUnit::CentsPerKilowattHour),
+            Some(format!(
+                "'{word}' is read as US cents; check that against a bill."
+            )),
+        )
     } else if cents {
         (Some(ImportUnit::CentsPerKilowattHour), None)
     } else if dollars {
@@ -1967,6 +2064,21 @@ fn classify_price(
         format!("The header '{shown}' names {phrase}."),
         join_checks([direction, unit_check, bare_dollar]),
     ))
+}
+
+/// The short word for cents in `c/kWh`, `ct/kWh`, or `c per kWh`. Anywhere else it is not one.
+fn cents_word<'a>(header: &str, words: &'a [String]) -> Option<&'a str> {
+    let short = |word: &str| matches!(word, "c" | "ct" | "cts" | "cent");
+    let before_kwh = |index: usize| match words.get(index + 1).map(String::as_str) {
+        Some("kwh") => header.contains('/'),
+        Some("per") => words.get(index + 2).is_some_and(|word| word == "kwh"),
+        _ => false,
+    };
+    words
+        .iter()
+        .enumerate()
+        .find(|(index, word)| short(word) && before_kwh(*index))
+        .map(|(_, word)| word.as_str())
 }
 
 /// The unit that the size of a price's sample values points to, with what to say about it.
@@ -3107,7 +3219,6 @@ mod tests {
             "backup_battery_kw",
             "backup_load_kw",
             "generator_kw",
-            "gen_MW",
             "standby_diesel_gen_kw",
             "grid_import_kw",
             "load_export_kw",
@@ -3179,8 +3290,6 @@ mod tests {
             "price_usd_per_kw",
             "demand_rate_usd_per_kw",
             "demand_charge_usd",
-            "price c/kWh",
-            "tariff_c_per_kwh",
             "price_cents_per_mwh",
             "price_per_100_kwh",
             // Capitals inside a word.
@@ -3244,7 +3353,6 @@ mod tests {
             ("Price_ZL_per_kWh", "PLN"),
             ("Price (XX$/kWh)", "not recognized"),
             ("Price_QQQ_per_kWh", "not recognized"),
-            ("price c/kWh", "not recognized"),
         ] {
             let found = suggest(&format!("{header}\n0.12\n"));
             assert!(found.columns.is_empty(), "{header}: {:?}", found.columns);
@@ -3253,6 +3361,148 @@ mod tests {
             assert!(note.contains("US dollars"), "{header}: {note}");
             assert!(!note.contains("gives no currency"), "{header}: {note}");
         }
+    }
+
+    #[test]
+    fn good_headers_in_everyday_words_get_a_role_and_a_unit() {
+        use ImportUnit::*;
+        for (header, role, unit) in [
+            ("P_Load_kW", "load", Kilowatt),
+            ("Load_P_kW", "load", Kilowatt),
+            ("Load in kW", "load", Kilowatt),
+            ("Load (in kW)", "load", Kilowatt),
+            ("Load Profile (kW)", "load", Kilowatt),
+            ("Bldg Load (kW)", "load", Kilowatt),
+            ("Campus Load (kW)", "load", Kilowatt),
+            ("Feeder Load (kW)", "load", Kilowatt),
+            ("Transformer Load (kW)", "load", Kilowatt),
+            ("Bus_Load_kW", "load", Kilowatt),
+            ("Household Load (kW)", "load", Kilowatt),
+            ("Home Consumption (kWh)", "load", KilowattHourPerInterval),
+            ("House Consumption (kWh)", "load", KilowattHourPerInterval),
+            ("Consumption in kWh", "load", KilowattHourPerInterval),
+            ("Load kW-h", "load", KilowattHourPerInterval),
+            ("Load (kW h)", "load", KilowattHourPerInterval),
+            ("Load (kW·h)", "load", KilowattHourPerInterval),
+            ("Load (kW.h)", "load", KilowattHourPerInterval),
+            ("Load (W-h)", "load", WattHourPerInterval),
+            ("Load (㎾)", "load", Kilowatt),
+            ("Load (㎾h)", "load", KilowattHourPerInterval),
+            ("Critical Power (kW)", "critical_load", Kilowatt),
+            ("P_PV_kW", "generation", Kilowatt),
+            ("PV Yield (kWh)", "generation", KilowattHourPerInterval),
+            ("Gen_MW", "generation", Megawatt),
+            ("GEN_MW", "generation", Megawatt),
+            ("Temp (ºC)", "temperature", Celsius),
+            ("Temperature (ºF)", "temperature", Fahrenheit),
+            ("Temp [℃]", "temperature", Celsius),
+            ("Temp (℉)", "temperature", Fahrenheit),
+            ("Temp in C", "temperature", Celsius),
+            ("Temperature (Centigrade)", "temperature", Celsius),
+            ("OA Temp (°F)", "temperature", Fahrenheit),
+            ("AmbTemp_C", "temperature", Celsius),
+            ("Spot Price ($/MWh)", "import_price", UsdPerMegawattHour),
+            ("Wholesale Price ($/MWh)", "import_price", UsdPerMegawattHour),
+            ("Market Price ($/MWh)", "import_price", UsdPerMegawattHour),
+            ("LBMP ($/MWHr)", "import_price", UsdPerMegawattHour),
+            ("TOU Rate ($/kWh)", "import_price", UsdPerKilowattHour),
+            ("Hourly Price ($/kWh)", "import_price", UsdPerKilowattHour),
+            ("Interval Price ($/kWh)", "import_price", UsdPerKilowattHour),
+            ("Period Price ($/kWh)", "import_price", UsdPerKilowattHour),
+            ("Usage Cost ($/kWh)", "import_price", UsdPerKilowattHour),
+            ("Net Metering Credit ($/kWh)", "export_price", UsdPerKilowattHour),
+        ] {
+            let found = suggest(&format!("{header}\n1\n"));
+            let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
+            assert_eq!(column.role, role, "{header}");
+            assert_eq!(column.unit, Some(unit), "{header}");
+        }
+    }
+
+    #[test]
+    fn cents_written_short_are_read_beside_a_kwh_and_say_so() {
+        for (header, role, word) in [
+            ("Retail Price (c/kWh)", "import_price", "'c'"),
+            ("Tariff (c/kWh)", "import_price", "'c'"),
+            ("Price (ct/kWh)", "import_price", "'ct'"),
+            ("tariff_c_per_kwh", "import_price", "'c'"),
+            ("c/kWh", "import_price", "'c'"),
+            ("Export Credit (c/kWh)", "export_price", "'c'"),
+            ("Export Tariff (c/kWh)", "export_price", "'c'"),
+            ("Feed-in Tariff (c/kWh)", "export_price", "'c'"),
+        ] {
+            let found = suggest(&format!("{header}\n8.5\n"));
+            let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
+            assert_eq!(column.role, role, "{header}");
+            assert_eq!(column.unit, Some(ImportUnit::CentsPerKilowattHour), "{header}");
+            assert!(
+                column.check.as_deref().unwrap().contains(&format!("{word} is read as US cents")),
+                "{header}: {:?}",
+                column.check
+            );
+        }
+        // Not beside a kWh, or with no `/` or `per` between, it is an unknown word.
+        for header in ["Price c", "Price C kWh", "Price (c/MWh)", "c kWh"] {
+            let found = suggest(&format!("{header}\n8.5\n"));
+            assert!(found.columns.is_empty(), "{header}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_word_does_not_open_the_door_to_what_it_sits_beside() {
+        for header in [
+            // Part of a load, a load that is not electric, a forecast, or a limit.
+            "HVAC Load (kW)",
+            "Lighting Load (kW)",
+            "EV Load (kW)",
+            "Gas Usage (kWh)",
+            "Load Forecast (kW)",
+            "Generation Forecast (kW)",
+            "Baseline Load (kW)",
+            "Base Load (kW)",
+            "Critical Load Limit (kW)",
+            "Non Critical Power (kW)",
+            "Inverter Load (kW)",
+            // Energy used on site, not what the site uses.
+            "Self Consumption (kWh)",
+            // Capacity, not output; a generator's parts; not one number.
+            "PV kWp",
+            "PV kW(p)",
+            "Solar Array Capacity kW",
+            "Diesel Gen kW",
+            "Gen Load (kW)",
+            // Indoors, not one reading, or an outlet.
+            "Zone Temp (°F)",
+            "Max Temp (C)",
+            "Temp_Out_C",
+            // A rate of change, and words `in` must not excuse.
+            "load kW/h",
+            "Load in Building",
+            "Load in kW Total Hours",
+            // Words that are prices only beside a price word.
+            "Spot kW",
+            // Money that is not an energy price.
+            "On-Peak Rate ($/kWh)",
+            "Solar Buyback Rate ($/kWh)",
+            "Avoided Cost ($/MWh)",
+            "Net Price ($/kWh)",
+            "Discharge Rate kWh",
+            "Spot Price",
+            "Usage Cost",
+        ] {
+            let found = suggest(&format!("{header}\n1\n"));
+            assert!(found.columns.is_empty(), "{header}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn gen_is_generation_and_asks_to_be_checked() {
+        let found = suggest("Gen_MW\n1\n");
+        let column = suggested(&found, "Gen_MW").unwrap();
+        assert!(column.check.as_deref().unwrap().contains("'Gen' is read"));
+        let found = suggest("Generation (MW)\n1\n");
+        let column = suggested(&found, "Generation (MW)").unwrap();
+        assert_eq!(column.check, None);
     }
 
     #[test]
