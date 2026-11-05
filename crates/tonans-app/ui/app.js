@@ -3576,7 +3576,9 @@ function renderSensitivity() {
   root.appendChild(box);
 
   if (!state.study) return;
-  root.appendChild(bestCells(state.study));
+  // A cell on a price axis is a price the site might face, not a design to pick, and copied
+  // into a scenario it would move that scenario's tariff and leave the baseline's behind.
+  if (!hasPriceAxis(state.study.axes)) root.appendChild(bestCells(state.study));
   root.appendChild(heatSection(state.study));
   if (state.study.warnings?.length) {
     root.appendChild(el('section', { class: 'stack' }, [el('h3', { text: 'Warnings on this study' }), ledger(state.study.warnings)]));
@@ -3645,9 +3647,6 @@ function bestOf(study, metric) {
 
 function bestCells(study) {
   const count = study.cells.length;
-  // A cell on a price axis is a price the site might face, not a design to pick, and copied
-  // into a scenario it would move that scenario's tariff and leave the baseline's behind.
-  const priced = hasPriceAxis(study.axes);
   const items = ['npv', 'peak', 'unmet'].map((id) => {
     const metric = METRICS.find((m) => m.id === id);
     const best = bestOf(study, metric);
@@ -3661,7 +3660,7 @@ function bestCells(study) {
       el('div', { class: 'k', text: `${word} ${metric.title.toLowerCase()}` }),
       el('div', { class: 'v', text: best.value === null ? '—' : metric.format(best.value) }),
       el('div', { class: 'where', text: where }),
-      best.varies && best.cells.length && !priced ? el('button', { type: 'button', text: 'Add this cell as a scenario',
+      best.varies && best.cells.length ? el('button', { type: 'button', text: 'Add this cell as a scenario',
         onclick: () => addCellAsScenario(study, best.cells[0]) }) : null,
     ]);
   });
