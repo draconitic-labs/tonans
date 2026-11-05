@@ -171,17 +171,28 @@ pub fn evaluate(
     // not scaled to a twelfth of anything. The numbers stand; this says what is in them.
     if cost.billed_month_count != 12 {
         let months = cost.billed_month_count;
+        let (billed, each) = if months == 1 {
+            ("1 calendar month at the site's time zone was billed".to_string(), "with")
+        } else {
+            (
+                format!("{months} calendar months at the site's time zone were billed"),
+                "each with",
+            )
+        };
+        let charges = match (cost.demand_charge_usd != 0.0, cost.fixed_charge_usd != 0.0) {
+            (true, true) => Some("a full demand charge and a full fixed charge"),
+            (true, false) => Some("a full demand charge"),
+            (false, true) => Some("a full fixed charge"),
+            (false, false) => None,
+        };
         ledger.push(Warning::caution(
             "cost.billed_months_not_twelve",
-            format!(
-                "the data touches {months} calendar month{plural} at the site's time zone, where a \
-                 whole year touches 12. {months} month{plural} {were} billed, each with a full \
-                 demand charge and a full fixed charge however little of the month the data \
-                 covers, and the grid cost, savings, and net present value include them. Data \
-                 that starts on the first of a month, in site time, does not do this.",
-                plural = if months == 1 { "" } else { "s" },
-                were = if months == 1 { "was" } else { "were" },
-            ),
+            match charges {
+                Some(charges) => {
+                    format!("{billed}, {each} {charges} however little of the month the data covers.")
+                }
+                None => format!("{billed}. No demand charge or fixed charge applies."),
+            },
         ));
     }
 

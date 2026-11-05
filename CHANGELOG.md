@@ -43,14 +43,19 @@ What else moves with this version:
 - **Exports.** The sensitivity CSV gains `installed_cost_usd` and `capex_per_kwh_usd`, and
   the provenance manifest gains `capex_per_kwh_usd`.
 - **Months billed.** Data touching other than 12 calendar months at the site's time zone now
-  raises `cost.billed_months_not_twelve`, saying how many were billed and that each gets a full
-  demand and fixed charge. A year that starts mid month, or is stamped in UTC for a site elsewhere,
-  touches 13, and a test year's annual grid cost read 72,700 USD where a year starting on the first
+  raises `cost.billed_months_not_twelve`, saying how many were billed and which charges each gets
+  in full. A year that starts mid month, is stamped at the end of each hour, or is stamped in UTC
+  for a site elsewhere, touches 13, and a test year's annual grid cost read 72,700 USD where a year
+  starting on the first
   reads 71,600. No number changes. The warning is outside `results_hash`, and inside the identity
   hash of a study over such data. A year touching exactly 12 raises nothing, and its results and
   hashes do not move.
 - **Fade wording.** The texts called fade linear, and it has always compounded: usable capacity is
   `initial x (1 - r)^(n - 1)` in year `n`. No number changes.
+- **Wording of warnings.** The months-billed warning and other warnings were reworded, and a study
+  keeps its warnings inside its identity hash, so a study's hash and the key of an export that
+  includes one move from earlier builds of this version. `model_input_hash` and `results_hash` do
+  not move, and no number changes.
 
 Other results that could have been wrong before this version, none of which changes the model:
 

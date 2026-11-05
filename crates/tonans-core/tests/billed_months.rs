@@ -21,8 +21,12 @@ fn now() -> DateTime<Utc> {
 }
 
 fn project(start: DateTime<Utc>, timezone: &str) -> Project {
+    project_of_hours(start, timezone, 8760)
+}
+
+fn project_of_hours(start: DateTime<Utc>, timezone: &str, hours: i64) -> Project {
     let mut csv = String::from("t,load\n");
-    for hour in 0..8760 {
+    for hour in 0..hours {
         let t = start + Duration::hours(hour);
         let load = 50 + if (9..17).contains(&t.hour()) { 50 } else { 0 };
         csv.push_str(&format!("{},{load}\n", t.format("%Y-%m-%dT%H:%M:%SZ")));
@@ -153,10 +157,7 @@ fn a_year_from_the_middle_of_a_month_bills_thirteen_and_says_so() {
     let messages = warned(&result);
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(messages[0].contains("13 calendar months"), "{messages:?}");
-    assert!(
-        messages[0].contains("13 months were billed"),
-        "{messages:?}"
-    );
+    assert!(messages[0].contains("were billed"), "{messages:?}");
     assert!(messages[0].contains("full demand charge and a full fixed charge"));
 }
 
@@ -218,7 +219,11 @@ fn the_report_and_the_export_carry_the_warning() {
     for file in ["report.html", "provenance.json", "summary.json"] {
         let text = std::fs::read_to_string(directory.join(file)).unwrap();
         assert!(text.contains(CODE), "{file}");
-        assert!(text.contains("13 months were billed"), "{file}");
+        assert!(
+            text.contains("13 calendar months at the site&#39;s time zone were billed")
+                || text.contains("13 calendar months at the site's time zone were billed"),
+            "{file}"
+        );
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -233,6 +238,82 @@ fn a_short_file_says_how_many_months_it_billed_in_the_singular() {
     dataset.interval_count = 3;
     project.validate().unwrap();
     let result = run::run_project(&project, now()).unwrap();
-    assert!(warned(&result)[0].contains("1 calendar month at"));
-    assert!(warned(&result)[0].contains("1 month was billed"));
+    assert_eq!(
+        warned(&result)[0],
+        "1 calendar month at the site's time zone was billed, with a full demand charge and a \
+         full fixed charge however little of the month the data covers."
+    );
+}
+
+/// The whole message, so that nothing beyond the count and the charges creeps back in.
+fn says(project: &Project, months: usize, expected: &str) {
+    let result = run::run_project(project, now()).unwrap();
+    assert_eq!(figures(&result).0, months);
+    let messages = warned(&result);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0], expected);
+}
+
+const BOTH: &str = "each with a full demand charge and a full fixed charge however little of the \
+                    month the data covers.";
+
+#[test]
+fn the_warning_is_true_of_a_year_stamped_at_the_end_of_each_hour() {
+    let hour_ending = start(2023, 1, 1) + Duration::hours(1);
+    says(
+        &project(hour_ending, "UTC"),
+        13,
+        &format!("13 calendar months at the site's time zone were billed, {BOTH}"),
+    );
+}
+
+#[test]
+fn the_warning_is_true_of_two_whole_years() {
+    says(
+        &project_of_hours(start(2022, 1, 1), "UTC", 2 * 8760),
+        24,
+        &format!("24 calendar months at the site's time zone were billed, {BOTH}"),
+    );
+}
+
+#[test]
+fn the_warning_is_true_of_a_short_file_from_the_first() {
+    says(
+        &project_of_hours(start(2023, 1, 1), "UTC", 90 * 24),
+        3,
+        &format!("3 calendar months at the site's time zone were billed, {BOTH}"),
+    );
+}
+
+#[test]
+fn the_warning_names_only_the_charges_that_apply() {
+    let with_charges = |demand: f64, fixed: f64| {
+        let mut project = project(start(2023, 7, 15), "UTC");
+        for scenario in &mut project.scenarios {
+            for price in scenario.tariff.demand_prices_per_kw_month_usd.values_mut() {
+                *price = demand;
+            }
+            scenario.tariff.fixed_charge_usd_per_month = fixed;
+        }
+        project.validate().unwrap();
+        project
+    };
+    says(
+        &with_charges(0.0, 0.0),
+        13,
+        "13 calendar months at the site's time zone were billed. No demand charge or fixed \
+         charge applies.",
+    );
+    says(
+        &with_charges(10.0, 0.0),
+        13,
+        "13 calendar months at the site's time zone were billed, each with a full demand charge \
+         however little of the month the data covers.",
+    );
+    says(
+        &with_charges(0.0, 100.0),
+        13,
+        "13 calendar months at the site's time zone were billed, each with a full fixed charge \
+         however little of the month the data covers.",
+    );
 }
