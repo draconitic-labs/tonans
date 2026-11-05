@@ -757,6 +757,9 @@ function renderBus() {
   renderNext();
 }
 
+/** Why a file on disk can never be opened, as against one that might open if tried again. */
+const UNOPENABLE_FILE = ['schema.unreadable', 'schema.invalid', 'schema.version_unsupported', 'schema.project_name_mismatch', 'limit.project_bytes'];
+
 /** The next useful thing, with the button that does it. Nothing, when there is nothing to do. */
 function nextStep() {
   const project = state.project;
@@ -765,7 +768,8 @@ function nextStep() {
              label: 'Save it again', run: () => guard(saveProject) };
   }
   if (state.reopenError) {
-    return { text: `Could not reopen this project: ${state.reopenError.message} Your edits are still here, and they are not saved.`,
+    return { text: `Could not reopen this project: ${state.reopenError.message} Your edits are still here, and they are not saved.` +
+               (UNOPENABLE_FILE.includes(state.reopenError.code) ? ' Move the bad file out of the workspace, then Save writes the edits.' : ''),
              label: 'Try again', run: offerReopen };
   }
   if (state.changedElsewhere) {
