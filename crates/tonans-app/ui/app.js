@@ -1665,6 +1665,9 @@ async function runImport(receipt) {
     restoreEditable(typedSince);
     syncUnsaved();
   }
+  // Straight away: the inputs on screen are bound to the object just replaced, and typing into
+  // them during the next wait would go nowhere.
+  if (state.view === 'data') renderData();
   const profile = await guard(() => api(projectPath('/profile')));
   if (state.project?.name !== into) return;
   state.profile = profile;

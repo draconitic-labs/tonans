@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde_json::json;
+use tonans_core::canonical::canonical_hash;
 use tonans_core::csvimport::{self, ColumnMapping, ImportRequest, ImportUnit, MappedColumn};
 use tonans_core::run::{self, RunResult};
 use tonans_core::schema::{GapPolicy, Project, SeriesKind, Site};
@@ -195,6 +196,12 @@ fn the_warning_reaches_a_study_but_not_the_numeric_identity() {
     };
     let study = sensitivity::run(&thirteen, &request(&thirteen)).unwrap();
     assert!(study.warnings.iter().any(|warning| warning.code == CODE));
+    let mut quieter = study.clone();
+    quieter.warnings.retain(|warning| warning.code != CODE);
+    assert_ne!(
+        canonical_hash(&study).unwrap(),
+        canonical_hash(&quieter).unwrap()
+    );
 
     let twelve = project(start(2023, 1, 1), "UTC");
     let study = sensitivity::run(&twelve, &request(&twelve)).unwrap();
