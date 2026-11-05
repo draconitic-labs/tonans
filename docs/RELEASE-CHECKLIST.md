@@ -41,7 +41,7 @@ assumption text, sensitivity results, saved exports, and project reopening. Reco
 tested package digest when this passes.
 
 Passed 2026-11-04 on Linux in the Tauri window (WebKitGTK 2.54), against source revision
-`7898a95` and a release binary with SHA-256 `4e08ea2534421e8f...`. It was run on a
+`cdc8bd7` and a release binary with SHA-256 `b8fb5b480ffac3ac...`. It was run on a
 virtual X display, with no session bus and no window manager, and driven by an AI agent using
 `xdotool` keystrokes and clicks and checking screenshots, at 1600x950 and 1280x720, in light
 and dark. Every pass started from a clean launch, with the display checked to hold no other
@@ -56,8 +56,11 @@ program's window. The second window below was opened on purpose.
   native dialog.
 - **File intake:** a 3 GiB sparse file and a 70 MB file were refused from their size, giving the
   64 MiB limit, with memory flat. Files named with an en dash, CJK, and an umlaut were accepted.
-  Headers such as `kWhLoad`, `price_eur_per_kwh`, `backup_generator_kw`, and
-  `load_kwh_cumulative` got a visible check or no suggestion, with a note saying why.
+  A file with `Non_Critical_Load_kW`, `Load_kWh/h`, `Price (A$/kWh)`, `Solar_Irradiance_W/m2`,
+  `Battery_Temp_C`, and `Price_BRL_per_kWh` got no suggestion for any of them, with a note saying
+  why for each, and its plain `Load (kW)` and `PV Power (kW)` columns were still recognized. A
+  103-character file name was accepted. Text typed while an import ran stayed on screen as unsaved,
+  and the Import button was disabled until it finished.
 - **Configure:** scenarios added from the battery-sizes, peak-shaving, backup-first, surplus,
   and blank-copy templates; imported prices applied to every scenario; tariff presets, including
   Flat energy price clearing a demand charge; a derating table edited, and a manual schedule
@@ -69,11 +72,15 @@ program's window. The second window below was opened on purpose.
   failed in that dialog said why and stayed put, and discarding left the project on disk unchanged.
 - **Run and compare:** five scenarios, 8,760 intervals, and a 105,120-interval file with four
   scenarios. Year 0 of the cash flow table shows installed cost in its own column, and the annual
-  tile says when it is scaled from a short file. The bundled demo, run through `tonans run`, gave
+  tile says when it is scaled from a short file. The same year starting on January 1, starting on
+  July 15, and stamped in UTC for a New York site raised nothing, then billed 13 months and said so,
+  on screen, in the report, and in `provenance.json` and `summary.json`. A battery with no capital
+  cost read "No capital to repay" in the comparison, the heat table, and the report. The bundled demo, run through `tonans run`, gave
   model input `97029af07baaf314...` and results `b9512228beb1b6a1...` at model 1.2.0. A build of
   `main` at 1.1.1 gives `4e25a00008c5ccdc...` and `65b99cea6ef175ec...`, and this source with its
   model version set back to 1.1.1 gives exactly those. No number in `summary.json` differs from
-  `main`, and the timeseries and scenario CSVs are byte-identical.
+  `main`, and the timeseries and scenario CSVs are byte-identical. `summary.json` and the report
+  also differ in the fade wording, and the report in its cash flow table's new column.
 - **Sensitivity:** a 9-cell grid and a 12-cell grid with installed cost moving at 550 USD per
   kWh, with the best cell marked as the best of those tested. An unreadable axis value was
   refused, and a cell was added as a scenario and undone. With the form already open, changing
@@ -83,8 +90,16 @@ program's window. The second window below was opened on purpose.
   study's scenario left the form working, on another scenario.
 - **Late answers:** on the 105,120-interval file, a run, a 256-cell study, and an export each
   finished after opening another project, and after saving a change. Each was dropped with a
-  message, or for an export, said where the bundle went, and nothing was marked Current. Memory after
-  each run stayed under 500 MB, and about 2.4 GB after an export.
+  message, or for an export, said where the bundle went, and nothing was marked Current.
+- **One heavy job:** Run on that file, open another project, Run: the second was told what was
+  running, and its button came back when that finished. The application peaked at 2.7 GB and read
+  under 700 MB after runs and 2.4 GB after an export. Over HTTP under a 6 GiB address-space limit,
+  three overlapping runs answered 200, 409, 409, and the process survived.
+- **When the file changes underneath:** a Reopen that could not read a corrupted file kept the edits,
+  still unsaved, with Save enabled, and the reason stayed on screen. Further typing and a Save after
+  restoring the file put all of it on disk. A project whose file was moved away said so, and Save
+  wrote it back. A save that had not yet been told got a dialog and wrote nothing, and leaving asked
+  first. A read-only project file refused the save with a clear message, and it worked once writable.
 - **Two windows on one workspace:** the first window said its project had changed elsewhere when it
   got focus. Saving from it was refused with a dialog, the other window's import stayed on disk,
   Enter kept the edits on screen, and reopening showed the import. Results overtaken this way read
@@ -97,7 +112,7 @@ program's window. The second window below was opened on purpose.
 - **Quit and reopen:** Quit, and a window-close message, both asked first over unsaved edits. Enter and
   Escape kept the work from both, and only a click on Quit without saving discarded it. After quitting
   and relaunching, the reopened project gave identical hashes: results `67fa5611b21f4c3f...`, model
-  input `0f4be9472fda11cf...`, project `41c990eb2f118ec7...`.
+  input `0f4be9472fda11cf...`, project `6eacdf850cfb6795...`.
 
 Not covered by this record:
 
