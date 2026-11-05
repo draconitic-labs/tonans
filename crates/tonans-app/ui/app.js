@@ -1529,7 +1529,8 @@ function mappingCard(receipt) {
 function syncImportButton() {
   const go = document.getElementById('run-import');
   const review = document.getElementById('mapping-review');
-  if (!go || !review) return;
+  // Leaving a project clears the mapping and can leave its hidden card behind.
+  if (!go || !review || !state.mapping) return;
   const standing = state.mapping.some((entry) => entry.why);
   review.classList.toggle('hidden', !standing);
   go.disabled = standing && !state.mappingReviewed;
