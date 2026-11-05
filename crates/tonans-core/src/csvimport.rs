@@ -1207,7 +1207,8 @@ fn header_words(header: &str, tokens: &[String]) -> Vec<String> {
             words.push("tariff".to_string());
             continue;
         }
-        if matches!(lower.as_str(), "hr" | "hrs" | "hour" | "hours") || (lower == "h" && !per_hour) {
+        if matches!(lower.as_str(), "hr" | "hrs" | "hour" | "hours") || (lower == "h" && !per_hour)
+        {
             let energy = match words.last().map(String::as_str) {
                 Some("kw" | "kilowatt" | "kilowatts") => Some("kwh"),
                 Some("w" | "watt" | "watts") => Some("wh"),
@@ -3402,7 +3403,11 @@ mod tests {
             ("OA Temp (°F)", "temperature", Fahrenheit),
             ("AmbTemp_C", "temperature", Celsius),
             ("Spot Price ($/MWh)", "import_price", UsdPerMegawattHour),
-            ("Wholesale Price ($/MWh)", "import_price", UsdPerMegawattHour),
+            (
+                "Wholesale Price ($/MWh)",
+                "import_price",
+                UsdPerMegawattHour,
+            ),
             ("Market Price ($/MWh)", "import_price", UsdPerMegawattHour),
             ("LBMP ($/MWHr)", "import_price", UsdPerMegawattHour),
             ("TOU Rate ($/kWh)", "import_price", UsdPerKilowattHour),
@@ -3410,7 +3415,11 @@ mod tests {
             ("Interval Price ($/kWh)", "import_price", UsdPerKilowattHour),
             ("Period Price ($/kWh)", "import_price", UsdPerKilowattHour),
             ("Usage Cost ($/kWh)", "import_price", UsdPerKilowattHour),
-            ("Net Metering Credit ($/kWh)", "export_price", UsdPerKilowattHour),
+            (
+                "Net Metering Credit ($/kWh)",
+                "export_price",
+                UsdPerKilowattHour,
+            ),
         ] {
             let found = suggest(&format!("{header}\n1\n"));
             let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
@@ -3434,9 +3443,17 @@ mod tests {
             let found = suggest(&format!("{header}\n8.5\n"));
             let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
             assert_eq!(column.role, role, "{header}");
-            assert_eq!(column.unit, Some(ImportUnit::CentsPerKilowattHour), "{header}");
+            assert_eq!(
+                column.unit,
+                Some(ImportUnit::CentsPerKilowattHour),
+                "{header}"
+            );
             assert!(
-                column.check.as_deref().unwrap().contains(&format!("{word} is read as US cents")),
+                column
+                    .check
+                    .as_deref()
+                    .unwrap()
+                    .contains(&format!("{word} is read as US cents")),
                 "{header}: {:?}",
                 column.check
             );
@@ -3515,7 +3532,10 @@ mod tests {
         ] {
             let found = suggest(&format!("{header}\n0.08\n"));
             assert!(found.columns.is_empty(), "{header}: {found:?}");
-            assert!(found.notes[0].contains("both import and export"), "{found:?}");
+            assert!(
+                found.notes[0].contains("both import and export"),
+                "{found:?}"
+            );
         }
         for (header, role) in [
             ("Import Price ($/kWh)", "import_price"),
@@ -3547,7 +3567,11 @@ mod tests {
             let found = suggest(&format!("{header}\n0.08\n"));
             let column = suggested(&found, header).unwrap_or_else(|| panic!("{header}: {found:?}"));
             assert_eq!(column.role, "export_price", "{header}");
-            assert_eq!(column.unit, Some(ImportUnit::UsdPerKilowattHour), "{header}");
+            assert_eq!(
+                column.unit,
+                Some(ImportUnit::UsdPerKilowattHour),
+                "{header}"
+            );
         }
         // `in` is a word only after `feed`.
         let found = suggest("Price in Tariff ($/kWh)\n0.08\n");

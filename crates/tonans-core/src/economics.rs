@@ -172,7 +172,10 @@ pub fn evaluate(
     if cost.billed_month_count != 12 {
         let months = cost.billed_month_count;
         let (billed, each) = if months == 1 {
-            ("1 calendar month at the site's time zone was billed".to_string(), "with")
+            (
+                "1 calendar month at the site's time zone was billed".to_string(),
+                "with",
+            )
         } else {
             (
                 format!("{months} calendar months at the site's time zone were billed"),
@@ -189,7 +192,9 @@ pub fn evaluate(
             "cost.billed_months_not_twelve",
             match charges {
                 Some(charges) => {
-                    format!("{billed}, {each} {charges} however little of the month the data covers.")
+                    format!(
+                        "{billed}, {each} {charges} however little of the month the data covers."
+                    )
                 }
                 None => format!("{billed}. No demand charge or fixed charge applies."),
             },

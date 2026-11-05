@@ -245,11 +245,7 @@ impl Router {
             // no-cors GET carries no Origin and reaches this far, so counting refused
             // requests would let any page spend the budget and lock the real UI out.
             if !state.allow_request() {
-                return Some(problem(
-                    429,
-                    "server.rate_limited",
-                    "Too many requests.",
-                ));
+                return Some(problem(429, "server.rate_limited", "Too many requests."));
             }
         }
 
@@ -268,9 +264,8 @@ impl Router {
             ("GET", ["styles.css"]) => assets::stylesheet(),
             ("GET", ["palette.css"]) => assets::palette(),
             ("GET", ["favicon.svg"]) => assets::favicon(),
-            ("GET", ["fonts", name]) => assets::font(name).unwrap_or_else(|| {
-                problem(404, "server.not_found", "No such font.")
-            }),
+            ("GET", ["fonts", name]) => assets::font(name)
+                .unwrap_or_else(|| problem(404, "server.not_found", "No such font.")),
 
             ("GET", ["api", "session"]) => api::session(state),
             ("GET", ["api", "projects"]) => api::list_projects(state),
@@ -307,11 +302,7 @@ impl Router {
             }
             ("POST", ["api", "shutdown"]) => api::shutdown(state),
 
-            _ => problem(
-                404,
-                "server.not_found",
-                "No such route.",
-            ),
+            _ => problem(404, "server.not_found", "No such route."),
         }
     }
 }

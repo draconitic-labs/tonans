@@ -70,10 +70,7 @@ fn safe_name_within(kind: &str, name: &str, limit: usize) -> Result<String> {
     }
 
     if name.contains('/') || name.contains('\\') {
-        return Err(reject(
-            "path.separator",
-            "it contains a path separator",
-        ));
+        return Err(reject("path.separator", "it contains a path separator"));
     }
     if name.contains(':') {
         return Err(reject(
