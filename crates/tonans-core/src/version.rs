@@ -26,7 +26,7 @@ pub const SUPPORT_EMAIL: &str = "support@flintglade.com";
 
 /// Where the source lives. Shown as a link the user can choose to open; Tonans itself
 /// never contacts it.
-pub const SOURCE_URL: &str = "https://github.com/flintglade-tools/tonans";
+pub const SOURCE_URL: &str = "https://github.com/draconitic-labs/tonans";
 
 /// The disclaimer shown under Help and in every exported artifact.
 ///

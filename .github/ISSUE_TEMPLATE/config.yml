@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Security problem
-    url: https://github.com/flintglade-tools/tonans/security/policy
+    url: https://github.com/draconitic-labs/tonans/security/policy
     about: Report vulnerabilities privately, not in a public issue.
