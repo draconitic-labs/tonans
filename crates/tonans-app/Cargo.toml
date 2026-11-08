@@ -29,7 +29,7 @@ chrono.workspace = true
 # import, which cannot be built by the `windows-gnu` toolchain without a full MinGW
 # binutils installation. 0.2 uses an ordinary import library, which the toolchain
 # already ships. See docs/ARCHITECTURE.md.
-getrandom = "0.2"
+getrandom = "0.4"
 
 # There is no HTTP framework here, and that is deliberate. See `src/http.rs`: Axum
 # would bring Tokio, Mio, and `windows-sys`, which is around sixty crates into the
