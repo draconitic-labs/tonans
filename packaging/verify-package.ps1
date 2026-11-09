@@ -156,8 +156,12 @@ try {
             # Latin-1, so the binary's byte stream is searchable as text and no byte
             # sequence is lost to a UTF-8 decode error.
             $content = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::GetEncoding('iso-8859-1'))
+            # The published domain comes out first, for the same string-table reason: the
+            # literal after it can start with a letter, and `@draconitic.comtext` would
+            # otherwise read as another domain.
+            $content = $content.Replace($allowedDomain, ' ')
             foreach ($m in [regex]::Matches($content, '@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}')) {
-                if ($m.Value -ne $allowedDomain) { $offenders += "$($file.Name): $($m.Value)" }
+                $offenders += "$($file.Name): $($m.Value)"
             }
         }
         if ($offenders) { "found a mail domain that is not $allowedDomain -- " + (($offenders | Select-Object -Unique | Select-Object -First 5) -join '; ') }
@@ -247,7 +251,8 @@ try {
         $stewards = @('apache.org', 'opensource.org', 'unlicense.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org', 'sil.org')
         $offenders = @()
         $content = Get-Content (Join-Path $work 'NOTICES.md') -Raw
-        foreach ($m in [regex]::Matches($content, 'https?://([^/\s)"''>`]+)')) {
+        # The whole URL is matched, so the one exact address below can be recognised.
+        foreach ($m in [regex]::Matches($content, 'https?://([^/\s)"''>`]+)[^\s)"''>`]*')) {
             $originHost = $m.Groups[1].Value
             # Barlow's copyright line names its authors' repository. A licence's copyright
             # statement must stay verbatim, so that one exact address is allowed.
