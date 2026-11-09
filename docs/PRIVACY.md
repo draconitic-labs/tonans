@@ -20,7 +20,7 @@ claim in it is checkable — the last section says how.
   from anywhere.
 - No payment data of any kind: Tonans has no payment integration.
 
-Flintglade does not receive your interval data, your project files, your scenario
+Draconitic Labs does not receive your interval data, your project files, your scenario
 assumptions, your results, or the fact that Tonans is installed.
 
 ## What Tonans stores, and where
@@ -28,9 +28,9 @@ assumptions, your results, or the fact that Tonans is installed.
 One folder, per user, not roamed:
 
 ```
-%LOCALAPPDATA%\Flintglade\Tonans                 on Windows
-$XDG_DATA_HOME/Flintglade/Tonans                  on Linux, which is usually
-~/.local/share/Flintglade/Tonans                  this
+%LOCALAPPDATA%\Draconitic Labs\Tonans            on Windows
+$XDG_DATA_HOME/Draconitic Labs/Tonans             on Linux, which is usually
+~/.local/share/Draconitic Labs/Tonans             this
 ```
 
 You can put it somewhere else with `--workspace <DIR>`.
@@ -69,7 +69,7 @@ Delete the workspace folder and the program. On Linux, if you installed the desk
 leaves the workspace for you to remove yourself. On Windows:
 
 ```powershell
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Flintglade\Tonans"
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Draconitic Labs\Tonans"
 ```
 
 Also delete any headless export directories you chose with `--out`. You do not
@@ -117,4 +117,4 @@ A silent change to this policy would make every other claim in it worthless.
 
 ---
 
-Flintglade — `support@flintglade.com`
+Draconitic Labs — `support@draconitic.com`

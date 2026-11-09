@@ -34,9 +34,9 @@ Tonans — microgrid scenario workbench, without a window
 
 Options:
   --workspace <DIR>   Where projects and exports live.
-                      Default: a folder for this user, Flintglade/Tonans under
-                      %LOCALAPPDATA% on Windows and under $XDG_DATA_HOME or
-                      ~/.local/share elsewhere.
+                      Default: a folder for this user, \"Draconitic Labs/Tonans\"
+                      under %LOCALAPPDATA% on Windows and under $XDG_DATA_HOME
+                      or ~/.local/share elsewhere.
   --port <PORT>       Loopback port. Default: 0, meaning the operating system
                       chooses one, which keeps it from being a fixed target.
   --print-link        Print the link with its one-launch token even when output is
@@ -52,7 +52,7 @@ For the application itself, run tonans-desktop, which opens a native window.
 Tonans binds only to 127.0.0.1, serves only assets compiled into this binary, and
 sends nothing anywhere. Results are planning estimates for human review.
 
-Flintglade — support@flintglade.com
+Draconitic Labs — support@draconitic.com
 ";
 
 fn main() -> ExitCode {
@@ -354,7 +354,7 @@ mod tests {
     fn the_help_text_states_the_product_boundary() {
         assert!(HELP.contains("planning estimates"));
         assert!(HELP.contains("127.0.0.1"));
-        assert!(HELP.contains("support@flintglade.com"));
+        assert!(HELP.contains("support@draconitic.com"));
     }
 
     #[test]

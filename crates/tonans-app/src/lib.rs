@@ -53,7 +53,7 @@ fn workspace_under(
             message: "Could not work out where to store projects. Pass --workspace <DIR>."
                 .to_string(),
         })?;
-    Ok(base.join("Flintglade").join("Tonans"))
+    Ok(base.join("Draconitic Labs").join("Tonans"))
 }
 
 #[cfg(test)]
@@ -68,7 +68,7 @@ mod tests {
     fn the_workspace_comes_from_the_first_usable_variable() {
         let expected = |base: &str| {
             PathBuf::from(absolute(base))
-                .join("Flintglade")
+                .join("Draconitic Labs")
                 .join("Tonans")
         };
         assert_eq!(
@@ -88,7 +88,7 @@ mod tests {
             workspace_under(None, None, Some(absolute("c"))).unwrap(),
             PathBuf::from(absolute("c"))
                 .join(".local/share")
-                .join("Flintglade")
+                .join("Draconitic Labs")
                 .join("Tonans")
         );
     }
@@ -102,7 +102,7 @@ mod tests {
                 workspace_under(value(), value(), Some(absolute("c"))).unwrap(),
                 PathBuf::from(absolute("c"))
                     .join(".local/share")
-                    .join("Flintglade")
+                    .join("Draconitic Labs")
                     .join("Tonans"),
                 "{useless:?}"
             );

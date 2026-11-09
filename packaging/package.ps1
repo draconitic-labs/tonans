@@ -241,14 +241,14 @@ $bom = [ordered]@{
     specVersion  = '1.5'
     version      = 1
     metadata     = [ordered]@{
-        tools      = @(@{ vendor = 'Flintglade'; name = 'packaging/package.ps1'; version = $Version })
+        tools      = @(@{ vendor = 'Draconitic Labs'; name = 'packaging/package.ps1'; version = $Version })
         component  = [ordered]@{
             type      = 'application'
             'bom-ref' = "pkg:cargo/tonans@$Version"
             name      = 'Tonans'
             version   = $Version
             purl      = "pkg:cargo/tonans@$Version"
-            publisher = 'Flintglade'
+            publisher = 'Draconitic Labs'
             licenses  = @(@{ expression = 'Apache-2.0' })
             description = 'Local-first deterministic microgrid scenario workbench.'
         }

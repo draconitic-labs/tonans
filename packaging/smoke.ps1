@@ -8,7 +8,7 @@
     "the artifact looks right" and "the artifact works".
 
     Everything happens in a temporary directory. The real workspace under
-    %LOCALAPPDATA%\Flintglade\Tonans is never touched, no browser is opened, no
+    %LOCALAPPDATA%\Draconitic Labs\Tonans is never touched, no browser is opened, no
     shortcut is created, and the process is stopped through the application's own
     shutdown route rather than being killed -- so a failure to shut down cleanly is
     itself a finding.

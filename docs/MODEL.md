@@ -272,4 +272,4 @@ the scenario result, report, and provenance manifest, sorted by severity. A
 synthesized interval always creates a critical warning that remains attached to the
 data set and every downstream artifact.
 
-Support: `support@flintglade.com`
+Support: `support@draconitic.com`

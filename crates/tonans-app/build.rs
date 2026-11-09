@@ -10,7 +10,7 @@
 //! pitch of this binary is that its tree is small enough to audit. The resource is
 //! forty lines of text and `windres` is already in the toolchain that builds us.
 //!
-//! The identity in it is the *published* identity — Flintglade and its support
+//! The identity in it is the *published* identity — Draconitic Labs and its support
 //! address — and nothing else. `packaging/verify-package.ps1` reads the block back
 //! out of the built executable and fails the release if it says anything different.
 
@@ -87,15 +87,15 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "Flintglade"
+            VALUE "CompanyName", "Draconitic Labs"
             VALUE "FileDescription", "Tonans - Microgrid Scenario Workbench"
             VALUE "FileVersion", "{version}"
             VALUE "InternalName", "tonans"
-            VALUE "LegalCopyright", "Copyright (C) 2026 Flintglade. Licensed under Apache-2.0."
+            VALUE "LegalCopyright", "Copyright (C) 2026 Draconitic Labs. Licensed under Apache-2.0."
             VALUE "OriginalFilename", "Tonans.exe"
             VALUE "ProductName", "Tonans"
             VALUE "ProductVersion", "{version}"
-            VALUE "Comments", "Planning estimates for human review. Not a power-flow, protection, or interconnection study. support@flintglade.com"
+            VALUE "Comments", "Planning estimates for human review. Not a power-flow, protection, or interconnection study. support@draconitic.com"
         END
     END
     BLOCK "VarFileInfo"

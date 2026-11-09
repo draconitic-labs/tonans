@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Tonans",
   "version": "0.1.0",
-  "identifier": "com.flintglade.tonans",
+  "identifier": "com.draconiticlabs.tonans",
   "build": {},
   "app": {
     "withGlobalTauri": true,
@@ -14,19 +14,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "rpm", "nsis"],
+    "targets": ["deb", "rpm", "nsis"],
     "category": "Productivity",
     "shortDescription": "Local-first microgrid scenario workbench",
     "longDescription": "Compares battery, tariff, renewable-generation, and outage-planning scenarios on your own interval data. Planning estimates for human review, not certified designs.",
-    "publisher": "Flintglade",
-    "copyright": "Copyright (C) 2026 Flintglade. Licensed under Apache-2.0.",
+    "publisher": "Draconitic Labs",
+    "copyright": "Copyright (C) 2026 Draconitic Labs. Licensed under Apache-2.0.",
     "license": "Apache-2.0",
+    "homepage": "https://github.com/draconitic-labs/tonans",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": { "desktopTemplate": "../../packaging/linux/package.desktop.hbs" },
+      "rpm": { "desktopTemplate": "../../packaging/linux/package.desktop.hbs" }
+    }
   }
 }

@@ -11,7 +11,7 @@
 
       1. A file set that is not exactly the allowlist -- missing OR extra.
       2. Windows version metadata that is absent, or that names anything other than
-         the published Flintglade identity.
+         the published Draconitic Labs identity.
       3. Personal-identity leakage. Checked as an ALLOWLIST, not a denylist: the
          only email address permitted anywhere in the package is the published
          support address, and no build-machine path may appear. A denylist would
@@ -51,8 +51,8 @@ $Payload = @(
 )
 
 # The published identity. Anything else that looks like a person is a failure.
-$AllowedEmail = 'support@flintglade.com'
-$AllowedCompany = 'Flintglade'
+$AllowedEmail = 'support@draconitic.com'
+$AllowedCompany = 'Draconitic Labs'
 $AllowedBenchmarkUrls = @(
     'https://github.com/NatLabRockies/ssc/tree/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832'
     'https://github.com/NatLabRockies/ssc/blob/86cf2e0a3de4f7dae1134ad3fa22492e2f1b3832/test/shared_test/lib_battery_capacity_test.h#L69-L90'
@@ -213,7 +213,7 @@ try {
         if ($offenders) { ($offenders | Select-Object -Unique) -join '; ' }
     }
 
-    Check 'documents Flintglade wrote reference no remote origin' {
+    Check 'documents Draconitic Labs wrote reference no remote origin' {
         # The threat is a document of ours pointing a user at a live origin: an
         # analytics endpoint, an update server, a licensing host, a payment page.
         #
@@ -241,7 +241,7 @@ try {
 
     Check 'NOTICES.md carries only third-party licence text, not our own links' {
         # NOTICES.md is exempt from the check above, so it gets its own, narrower one:
-        # every origin in it must belong to a licence steward. A Flintglade-controlled
+        # every origin in it must belong to a licence steward. A Draconitic Labs-controlled
         # origin appearing here would be smuggling exactly what that exemption exists
         # to permit.
         $stewards = @('apache.org', 'opensource.org', 'unlicense.org', 'mozilla.org', 'gnu.org', 'unicode.org', 'rust-lang.org', 'sil.org')

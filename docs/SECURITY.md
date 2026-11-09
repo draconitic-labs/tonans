@@ -181,5 +181,5 @@ they do not provide publisher authentication.
 
 ## Reporting a vulnerability
 
-Email `support@flintglade.com` with a reproducible description. Test only systems and
+Email `support@draconitic.com` with a reproducible description. Test only systems and
 data you are authorized to test.

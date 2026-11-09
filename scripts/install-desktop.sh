@@ -15,7 +15,7 @@ set -euo pipefail
 
 # The application id. The menu entry's file name and icon name must match it, because
 # under Wayland that is how the desktop connects a window to its launcher.
-APP_ID="com.flintglade.tonans"
+APP_ID="com.draconiticlabs.tonans"
 
 repo_root() { cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P; }
 
@@ -151,7 +151,7 @@ uninstall() {
   refresh_desktop_caches
   echo
   echo "Your projects were not touched. They are in the workspace folder, which by default"
-  echo "is $DATA_DIR/Flintglade/Tonans. Remove it yourself if you want them gone."
+  echo "is $DATA_DIR/Draconitic Labs/Tonans. Remove it yourself if you want them gone."
 }
 
 check_build_needs() {

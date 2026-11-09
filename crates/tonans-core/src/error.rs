@@ -386,7 +386,7 @@ mod tests {
         let error = Error::non_finite("soc_pct", f64::INFINITY);
         assert_eq!(error.http_status(), 500);
         assert!(error.to_string().contains("defect in Tonans"));
-        assert!(error.to_string().contains("support@flintglade.com"));
+        assert!(error.to_string().contains("support@draconitic.com"));
     }
 
     #[test]

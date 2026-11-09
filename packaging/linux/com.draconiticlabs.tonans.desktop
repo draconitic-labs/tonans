@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Tonans
+GenericName=Microgrid Scenario Workbench
+Comment=Compare battery, tariff, and outage scenarios on your own interval data. Planning estimates for human review.
+Exec="@EXEC@"
+Icon=com.draconiticlabs.tonans
+Terminal=false
+Categories=Science;Engineering;
+Keywords=microgrid;battery;energy;tariff;outage;
+StartupNotify=true
+StartupWMClass=com.draconiticlabs.tonans

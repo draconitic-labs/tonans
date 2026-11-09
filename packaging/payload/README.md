@@ -1,6 +1,6 @@
 # Tonans — Microgrid Scenario Workbench
 
-**Version 0.1.0 · Windows x64 · Release candidate · Unsigned · Apache-2.0**
+**Version 0.1.0 · Windows x64 · Unsigned · Apache-2.0**
 
 Tonans compares battery-storage and microgrid planning scenarios on your own
 interval data, on your own machine. It performs deterministic single-bus energy
@@ -41,9 +41,9 @@ registry and nothing outside its own workspace folder.
 
 **This binary is unsigned.** Windows SmartScreen will warn you, and it is right to:
 an unsigned executable is one whose publisher Windows cannot confirm. If you did
-not obtain this file directly from Flintglade, do not run it. If you did, choose
-**More info → Run anyway**. Verifying the checksum first is the honest way to
-satisfy yourself the file is the one that was published.
+not obtain this file from the Tonans releases page on GitHub, do not run it. If you
+did, choose **More info → Run anyway**. Verifying the checksum first is the honest
+way to satisfy yourself the file is the one that was published.
 
 On first launch Tonans installs a bundled demonstration project — Riverside Works —
 by importing a sample CSV through the real importer. Nothing is smuggled past
@@ -100,7 +100,7 @@ Tonans.exe --help
 By default:
 
 ```
-%LOCALAPPDATA%\Flintglade\Tonans
+%LOCALAPPDATA%\Draconitic Labs\Tonans
 ```
 
 That is one folder, per user, not roamed. Projects are JSON. Exports are ordinary
@@ -135,7 +135,7 @@ carries the third-party licenses.
 
 ## Support
 
-Flintglade — `support@flintglade.com`
+Draconitic Labs — `support@draconitic.com`
 
 When reporting a problem, the provenance manifest from an export
 (`provenance.json`) identifies exactly which build produced which numbers from

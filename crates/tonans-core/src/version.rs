@@ -19,10 +19,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const PRODUCT_NAME: &str = "Tonans";
 
 /// Vendor identity. The support address is the only contact channel we publish.
-pub const VENDOR_NAME: &str = "Flintglade";
+pub const VENDOR_NAME: &str = "Draconitic Labs";
 
 /// Support contact printed in reports and in the application.
-pub const SUPPORT_EMAIL: &str = "support@flintglade.com";
+pub const SUPPORT_EMAIL: &str = "support@draconitic.com";
 
 /// Where the source lives. Shown as a link the user can choose to open; Tonans itself
 /// never contacts it.

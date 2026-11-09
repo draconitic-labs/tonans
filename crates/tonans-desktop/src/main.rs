@@ -52,7 +52,7 @@ Tonans — microgrid scenario workbench
 The window shows the Tonans interface, served in-process on 127.0.0.1. Nothing is sent
 anywhere. Results are planning estimates for human review.
 
-Flintglade — support@flintglade.com
+Draconitic Labs — support@draconitic.com
 ";
 
 /// The one window.
@@ -694,8 +694,8 @@ mod tests {
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let identifier = config["identifier"].as_str().unwrap();
         // The include! path itself is half of this check: the file must have this name.
-        assert_eq!(identifier, "com.flintglade.tonans");
-        let entry = include_str!("../../../packaging/linux/com.flintglade.tonans.desktop");
+        assert_eq!(identifier, "com.draconiticlabs.tonans");
+        let entry = include_str!("../../../packaging/linux/com.draconiticlabs.tonans.desktop");
         // Line by line, because a Windows checkout has CRLF endings and `include_str!`
         // keeps them.
         let has_line = |text: &str, wanted: String| text.lines().any(|line| line == wanted);
@@ -706,6 +706,33 @@ mod tests {
         );
         let installer = include_str!("../../../scripts/install-desktop.sh");
         assert!(has_line(installer, format!("APP_ID=\"{identifier}\"")));
+    }
+
+    #[test]
+    fn the_packaged_menu_entry_matches_the_installed_one() {
+        // The .deb and .rpm name their entry after the product and their icons after the
+        // binary, so the bundler fills in Exec and Icon. Every other line, the window class
+        // above all, must be the installed entry's.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for format in ["deb", "rpm"] {
+            assert_eq!(
+                config["bundle"]["linux"][format]["desktopTemplate"],
+                "../../packaging/linux/package.desktop.hbs",
+                "{format}"
+            );
+        }
+        let installed = include_str!("../../../packaging/linux/com.draconiticlabs.tonans.desktop");
+        let packaged = include_str!("../../../packaging/linux/package.desktop.hbs");
+        let filled_in = |line: &&str| line.starts_with("Exec=") || line.starts_with("Icon=");
+        let rest = |text: &'static str| {
+            text.lines()
+                .filter(|line| !filled_in(line))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rest(installed), rest(packaged));
+        assert!(packaged.lines().any(|line| line == "Exec={{exec}}"));
+        assert!(packaged.lines().any(|line| line == "Icon={{icon}}"));
     }
 
     #[cfg(unix)]

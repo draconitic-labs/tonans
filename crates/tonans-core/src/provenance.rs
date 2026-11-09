@@ -360,8 +360,8 @@ mod tests {
     #[test]
     fn the_tool_stamp_names_no_machine_and_no_user() {
         let tool = ToolInfo::current();
-        assert_eq!(tool.vendor, "Flintglade");
-        assert_eq!(tool.support, "support@flintglade.com");
+        assert_eq!(tool.vendor, "Draconitic Labs");
+        assert_eq!(tool.support, "support@draconitic.com");
         assert!(!tool.app_version.is_empty());
         // Platform is a target triple fragment, never an identifier.
         assert!(tool.platform.contains('/'));
