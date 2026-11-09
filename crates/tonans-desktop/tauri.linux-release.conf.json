@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/doc/tonans/LICENSE": "../../LICENSE",
+          "/usr/share/doc/tonans/NOTICES.md": "../../packaging/out/linux/NOTICES-desktop.md"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/doc/tonans/LICENSE": "../../LICENSE",
+          "/usr/share/doc/tonans/NOTICES.md": "../../packaging/out/linux/NOTICES-desktop.md"
+        }
+      }
+    }
+  }
+}

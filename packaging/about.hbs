@@ -1,0 +1,23 @@
+# Third-party notices
+
+The Rust crates in this program's dependency graph for x86_64 Linux, and the licence
+each is used under. Build-script and test-only dependencies are left out. System
+libraries are not part of the package; your distribution supplies them under their own
+licences.
+
+| Licence | Crates |
+|---|---|
+{{#each overview}}
+| {{{name}}} | {{count}} |
+{{/each}}
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+
+~~~~text
+{{{text}}}
+~~~~
+
+{{/each}}
