@@ -13,38 +13,46 @@ from the tag and lists their digests in the release's `SHA256SUMS`, so no packag
 recorded here: the files checked below are branch builds of the same source, not the
 published bytes.
 
-Gates run on the `release-0.1.0` branch at `2a32cd7`. Later commits change only documents and
-remove a temporary trigger from the release workflow.
+Gates run on the `release-0.1.0` branch at `3bb9af5`. The commit after it changes only
+documents.
 
-- **CI** (`ci.yml`, run 42540019421): formatting, strict Clippy over the workspace, the
+- **CI** (`ci.yml`, run 42543968099): formatting, strict Clippy over the workspace, the
   workspace tests on Ubuntu 24.04 including the desktop shell's, the tests without the shell
   on Windows (MSVC), the page's Node tests, a release build, `tonans --help`, and
   `tonans-desktop --version`: passed on both systems.
 - **Dependency audit** (`security.yml`, `cargo audit --deny warnings` with the five
-  advisories below): passed, run 42540025354.
-- **CodeQL** (Rust and JavaScript): passed, run 42540025324.
-- **Release workflow, Windows job** (run 42540019408): `package.ps1` built
-  `tonans-0.1.0-windows-x64.zip` with rustc 1.99.1 on `stable-x86_64-pc-windows-gnullvm`,
-  the toolchain the script names, and llvm-mingw 20261020 (UCRT). It ships 26 third-party
+  advisories below): passed, run 42543974201.
+- **CodeQL** (Rust and JavaScript): passed, run 42543974251.
+- **Release workflow, Windows job** (`workflow_dispatch` run 42543968019): `package.ps1`
+  built `tonans-0.1.0-windows-x64.zip` with rustc 1.96.1 on
+  `1.96.1-x86_64-pc-windows-gnullvm`, and llvm-mingw 20261020 (UCRT). It ships 26 third-party
   crates and embeds 27 distinct licence texts. `verify-package.ps1` passed 15 of 15 checks
   and `smoke.ps1` 12 of 12. Two checks in `verify-package.ps1` failed falsely on its first
   run and were fixed: the mail-domain check read `@draconitic.comtext` from the executable's
   string table as a foreign domain, and the NOTICES.md origin check compared only scheme and
   host, so its exception for Barlow's copyright address could never apply.
-- **Release workflow, Linux job** (run 42540019408), on Ubuntu 22.04: cargo-about 0.9.2
-  wrote NOTICES.md for `tonans` and for `tonans-desktop`, each with the Barlow font licence,
-  and Tauri CLI 2.12.4 built `Tonans_0.1.0_amd64.deb` and `Tonans-0.1.0-1.x86_64.rpm`. Each
-  package was unpacked outside the checkout and its binary run with an empty environment:
+- **Release workflow, Linux job** (the same run), on Ubuntu 22.04: cargo-about 0.9.2 wrote
+  NOTICES.md for `tonans` and for `tonans-desktop`, each with the Barlow font licence and
+  checked to list real crates (`serde_json`, and `tauri` for the window), and Tauri CLI
+  2.12.4 built `Tonans_0.1.0_amd64.deb` and `Tonans-0.1.0-1.x86_64.rpm`. Each package was
+  unpacked outside the checkout and its binary run with an empty environment:
   - from the tarball, `tonans --version`, `--help`, and `tonans run` of the demo project.
     The bundle passed `sha256sum -c`, and its model input hash `97029af07baaf314...` and
     results hash `b9512228beb1b6a1...` are the ones in the walkthrough record below;
-  - `tonans-desktop --version` and `--help` from the .deb, and `--version` from the .rpm;
+  - `tonans-desktop --version` and `--help` from the .deb, and `--version` from the .rpm,
+    whose header and payload digests passed `rpm -Kv`;
   - neither binary contains a `/home/runner` path, the menu entry carries
     `StartupWMClass=com.draconiticlabs.tonans`, and LICENSE and NOTICES.md are in
     `/usr/share/doc/tonans/`;
   - the .deb then installed with apt, and the installed `tonans-desktop --version` ran.
 - **Local, Fedora 44**: `cargo test -p tonans-core -p tonans-app --all-targets --locked`
-  passed, 313 tests. These crates are unchanged since that run.
+  passed, 313 tests. These crates are unchanged since that run. The run's Linux files,
+  downloaded and unpacked outside the checkout, gave the same results as above, and the
+  `tonans` server answered 401 without a token or with a wrong one, 403 to a foreign
+  `Host`, 200 with the token, and exited 0 when asked to shut down.
+- **Fresh-context review** of the branch at `2a2972f`: nothing blocking. Its four requests,
+  the pinned Windows toolchain, content checks on the notices, the signing statement, and
+  `rpm -Kv`, are in `3bb9af5`.
 
 Not run for this release:
 
