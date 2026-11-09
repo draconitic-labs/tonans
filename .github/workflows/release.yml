@@ -101,7 +101,7 @@ jobs:
           ls -l dist
       - name: Run the packaged programs from their extracted packages
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           version='${{ steps.version.outputs.version }}'
           dist="$GITHUB_WORKSPACE/dist"
           check="$(mktemp -d)"
@@ -151,8 +151,11 @@ jobs:
           rpm -qip "$rpm"
           rpm -qp --requires "$rpm"
           rpm -qlp "$rpm"
+          # Through a file: cpio stops at its trailer, and a pipe would then fail on
+          # rpm2cpio's broken write under pipefail.
+          rpm2cpio "$rpm" > "$check/payload.cpio"
           mkdir "$check/rpm"
-          (cd "$check/rpm" && rpm2cpio "$rpm" | cpio -idm --quiet)
+          (cd "$check/rpm" && cpio -idm --no-absolute-filenames < "$check/payload.cpio")
           grep -q 'Apache License' "$check/rpm/usr/share/doc/tonans/LICENSE"
           grep -q '^## SIL Open Font License 1.1$' "$check/rpm/usr/share/doc/tonans/NOTICES.md"
           grep -qx 'StartupWMClass=com.draconiticlabs.tonans' "$check/rpm/usr/share/applications/Tonans.desktop"
