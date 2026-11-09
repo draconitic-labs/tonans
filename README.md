@@ -41,6 +41,7 @@ sha256sum --check --ignore-missing SHA256SUMS
 | `Tonans-0.1.0-1.x86_64.rpm` | The desktop window, for Fedora on x86_64 |
 | `tonans-0.1.0-linux-x86_64.tar.gz` | The `tonans` command, without a window, for x86_64 Linux with glibc 2.34 or later |
 | `tonans-0.1.0-windows-x64.zip` | The `tonans` command, without a window, for 64-bit Windows |
+| `tonans-0.1.0-windows-x64.zip.sha256` | The SHA-256 of the Windows ZIP, which the README inside the ZIP refers to |
 
 **Debian and Ubuntu.** Install the package, which also installs WebKitGTK if it is
 missing:
@@ -159,8 +160,8 @@ llvm-mingw toolchain and builds the `tonans` command only:
 
 ```powershell
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
-cargo +stable-x86_64-pc-windows-gnullvm test -p tonans-core -p tonans-app --all-targets --locked
-cargo +stable-x86_64-pc-windows-gnullvm clippy -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
+cargo +1.96.1-x86_64-pc-windows-gnullvm test -p tonans-core -p tonans-app --all-targets --locked
+cargo +1.96.1-x86_64-pc-windows-gnullvm clippy -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
 ```
 
 ## Packaging

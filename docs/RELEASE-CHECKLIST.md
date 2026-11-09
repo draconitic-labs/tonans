@@ -49,7 +49,6 @@ remove a temporary trigger from the release workflow.
 Not run for this release:
 
 - the walkthrough on Windows, as above, and of this exact source on Linux;
-- a fresh-context review of the final diff and packages;
 - the CycloneDX JSON Schema validation recorded for 2026-07-13.
 
 ### Earlier record, 2026-07-13
@@ -67,7 +66,8 @@ source.
   returned GO for the exact reviewed source and archive digest; and
 - Authenticode status is intentionally `NotSigned` for this release candidate.
 
-Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
+Use the GNU/LLVM Rust toolchain `1.96.1-x86_64-pc-windows-gnullvm`, the version
+`rust-toolchain.toml` pins, and place Cargo before llvm-mingw:
 
 ```powershell
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
@@ -208,7 +208,7 @@ stored energy, SOC-floor clipping, throughput, grid import, losses, and balance 
 matching normalized assumptions.
 
 ```powershell
-cargo +stable-x86_64-pc-windows-gnullvm test `
+cargo +1.96.1-x86_64-pc-windows-gnullvm test `
   -p tonans-core --test ssc_capacity_reference --locked
 ```
 
@@ -221,10 +221,10 @@ maintainer endorsement, or evidence of full SAM/SSC parity.
 ### Format, lint, and tests
 
 ```powershell
-cargo +stable-x86_64-pc-windows-gnullvm fmt --all -- --check
-cargo +stable-x86_64-pc-windows-gnullvm clippy `
+cargo +1.96.1-x86_64-pc-windows-gnullvm fmt --all -- --check
+cargo +1.96.1-x86_64-pc-windows-gnullvm clippy `
   -p tonans-core -p tonans-app --all-targets --locked -- -D warnings
-cargo +stable-x86_64-pc-windows-gnullvm test `
+cargo +1.96.1-x86_64-pc-windows-gnullvm test `
   -p tonans-core -p tonans-app --all-targets --locked
 ```
 

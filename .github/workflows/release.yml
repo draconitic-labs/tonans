@@ -19,6 +19,8 @@ env:
   CARGO_ABOUT_VERSION: 0.9.2
   CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
   LLVM_MINGW_VERSION: '20261020'
+  # The toolchain packaging/package.ps1 names; rust-toolchain.toml pins the same version.
+  WINDOWS_TOOLCHAIN: 1.96.1-x86_64-pc-windows-gnullvm
   LLVM_MINGW_SHA256: fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74cd
 
 jobs:
@@ -79,6 +81,9 @@ jobs:
               echo '~~~~'
             } >> "$notices"
             grep -c '^## ' "$notices"
+            # Real crates, not only headings: one both binaries link, and Tauri in the window.
+            grep -Eq '^Used by: (.*, )?serde_json [0-9]' "$notices"
+            if [ "$crate" = desktop ]; then grep -Eq '^Used by: (.*, )?tauri [0-9]' "$notices"; fi
           done
       - name: Build the desktop .deb and .rpm
         working-directory: crates/tonans-desktop
@@ -114,6 +119,7 @@ jobs:
           ls -l "$cli"
           grep -q '^# Third-party notices' "$cli/NOTICES.md"
           grep -q '^## SIL Open Font License 1.1$' "$cli/NOTICES.md"
+          grep -Eq '^Used by: (.*, )?serde_json [0-9]' "$cli/NOTICES.md"
           grep -q 'Apache License' "$cli/LICENSE"
           bare "$cli/tonans" --version | tee out.txt
           grep -Eq "$version_line" out.txt
@@ -135,6 +141,7 @@ jobs:
           dpkg-deb -x "$deb" "$check/deb"
           grep -q 'Apache License' "$check/deb/usr/share/doc/tonans/LICENSE"
           grep -q '^## SIL Open Font License 1.1$' "$check/deb/usr/share/doc/tonans/NOTICES.md"
+          grep -Eq '^Used by: (.*, )?tauri [0-9]' "$check/deb/usr/share/doc/tonans/NOTICES.md"
           cat "$check/deb/usr/share/applications/Tonans.desktop"
           grep -qx 'StartupWMClass=com.draconiticlabs.tonans' "$check/deb/usr/share/applications/Tonans.desktop"
           bare "$check/deb/usr/bin/tonans-desktop" --version | tee out.txt
@@ -150,12 +157,14 @@ jobs:
           rpm -qp --requires "$rpm"
           rpm -qlp "$rpm"
           rpm -qp --qf 'payload size in the header: %{LONGARCHIVESIZE}\n' "$rpm"
+          rpm -Kv "$rpm"
           # bsdtar, not rpm2cpio: Ubuntu 22.04's rpm2cpio exits 1, silently, when the
           # header records no payload size, and the Tauri bundler's .rpm records none.
           mkdir "$check/rpm"
           bsdtar -xf "$rpm" -C "$check/rpm"
           grep -q 'Apache License' "$check/rpm/usr/share/doc/tonans/LICENSE"
           grep -q '^## SIL Open Font License 1.1$' "$check/rpm/usr/share/doc/tonans/NOTICES.md"
+          grep -Eq '^Used by: (.*, )?tauri [0-9]' "$check/rpm/usr/share/doc/tonans/NOTICES.md"
           grep -qx 'StartupWMClass=com.draconiticlabs.tonans' "$check/rpm/usr/share/applications/Tonans.desktop"
           bare "$check/rpm/usr/bin/tonans-desktop" --version | tee out.txt
           grep -Eq "$version_line" out.txt
@@ -190,7 +199,7 @@ jobs:
       # packaging/package.ps1 builds with this toolchain and llvm-mingw, and
       # verify-package.ps1 reads the executable's imports with llvm-objdump.
       - name: Install the GNU/LLVM Rust toolchain
-        run: rustup toolchain install stable-x86_64-pc-windows-gnullvm --profile minimal --force-non-host
+        run: rustup toolchain install $env:WINDOWS_TOOLCHAIN --profile minimal --force-non-host
       - name: Install llvm-mingw
         run: |
           $name = "llvm-mingw-$env:LLVM_MINGW_VERSION-ucrt-x86_64"
@@ -205,8 +214,11 @@ jobs:
       - name: Package
         run: |
           $env:PATH = "$env:TONANS_PATH;$env:PATH"
-          cargo +stable-x86_64-pc-windows-gnullvm --version
-          rustc +stable-x86_64-pc-windows-gnullvm --version
+          cargo "+$env:WINDOWS_TOOLCHAIN" --version
+          rustc "+$env:WINDOWS_TOOLCHAIN" --version
+          if (-not (Select-String -Path packaging\package.ps1 -SimpleMatch "`$Toolchain = '$env:WINDOWS_TOOLCHAIN'" -Quiet)) {
+            throw "packaging/package.ps1 does not build with $env:WINDOWS_TOOLCHAIN"
+          }
           .\packaging\package.ps1
       - name: Verify the package
         run: |

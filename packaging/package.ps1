@@ -41,7 +41,7 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $OutDir = Join-Path $PSScriptRoot 'out'
 $StageDir = Join-Path $OutDir 'stage'
-$Toolchain = 'stable-x86_64-pc-windows-gnullvm'
+$Toolchain = '1.96.1-x86_64-pc-windows-gnullvm'
 
 # The exact set of files in the ZIP. verify-package.ps1 reads this same list.
 # A file not named here is a packaging bug, not a bonus.

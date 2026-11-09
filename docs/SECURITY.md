@@ -174,8 +174,9 @@ origins, and undeclared files.
 
 ## Signing
 
-This release candidate is explicitly unsigned. Windows SmartScreen may warn that the
-publisher cannot be confirmed, and that warning is accurate. The external archive
+The Windows build of Tonans 0.1.0 is not code-signed, and the Linux packages are not
+signed either. Windows SmartScreen may warn that the publisher cannot be confirmed, and
+that warning is accurate. The external archive
 digest and internal `SHA256SUMS.txt` establish integrity against published values;
 they do not provide publisher authentication.
 
