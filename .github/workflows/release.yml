@@ -5,8 +5,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-    # Temporary: registers the workflow so it can be dispatched before it is on main.
-    branches: [release-0.1.0]
   workflow_dispatch:
 
 permissions:
@@ -152,8 +150,8 @@ jobs:
           rpm -qp --requires "$rpm"
           rpm -qlp "$rpm"
           rpm -qp --qf 'payload size in the header: %{LONGARCHIVESIZE}\n' "$rpm"
-          # bsdtar, not rpm2cpio: Ubuntu 22.04's rpm2cpio exits 1 when the copied payload
-          # differs from the size the header records, and says nothing.
+          # bsdtar, not rpm2cpio: Ubuntu 22.04's rpm2cpio exits 1, silently, when the
+          # header records no payload size, and the Tauri bundler's .rpm records none.
           mkdir "$check/rpm"
           bsdtar -xf "$rpm" -C "$check/rpm"
           grep -q 'Apache License' "$check/rpm/usr/share/doc/tonans/LICENSE"

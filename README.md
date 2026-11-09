@@ -1,19 +1,17 @@
 # Tonans
 
-Tonans is Flintglade's local-first microgrid scenario workbench. It compares
+Tonans is Draconitic Labs' local-first microgrid scenario workbench. It compares
 transparent battery, tariff, renewable-generation, and outage-planning scenarios
 without controlling equipment or presenting planning estimates as certified designs.
 
-## Status: release candidate. No binary release yet.
+## Status
 
-Tonans is open-source software under the [Apache License 2.0](LICENSE).
+Version 0.1.0 is the first binary release. Tonans is open-source software under the
+[Apache License 2.0](LICENSE).
 
-The code gates have passed during the current hardening cycle: formatting, strict
-Clippy, the workspace test suite, dependency audit, production build, and package
-checks. The final integrated package and fresh-context review gates will be rerun
-after the current release changes are combined; `docs/RELEASE-CHECKLIST.md` records
-the reproducible commands and does not treat an earlier run as evidence for a later
-artifact.
+The release files were built and checked by `.github/workflows/release.yml`.
+`docs/RELEASE-CHECKLIST.md` records the gates that ran for this release and their
+results.
 
 The required public-reference comparison is closed by `docs/BENCHMARK.md` and the
 executable SSC regression. Its scope is deliberately narrow: a normalized SSC
@@ -23,8 +21,63 @@ or a claim of SAM/SSC parity.
 
 The walkthrough (import -> configure -> run -> compare -> sensitivity -> export ->
 quit -> relaunch -> reopen) passed on 2026-11-04 in the native window on Linux with real
-input. It has not been done on Windows. `docs/RELEASE-CHECKLIST.md` records the result
-and what remains before a Windows binary is published.
+input. It has not been done on Windows: the Windows package was released without it, by
+the owner's decision. `docs/RELEASE-CHECKLIST.md` records both.
+
+## Install
+
+Download the files for your system from the
+[v0.1.0 release](https://github.com/draconitic-labs/tonans/releases/tag/v0.1.0) on the
+[Releases page](https://github.com/draconitic-labs/tonans/releases). None of them is
+signed. `SHA256SUMS` lists the SHA-256 of every file; check a download with:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+| File | What it is |
+|---|---|
+| `Tonans_0.1.0_amd64.deb` | The desktop window, for Ubuntu 22.04 or later and Debian 12 or later, on x86_64 |
+| `Tonans-0.1.0-1.x86_64.rpm` | The desktop window, for Fedora on x86_64 |
+| `tonans-0.1.0-linux-x86_64.tar.gz` | The `tonans` command, without a window, for x86_64 Linux with glibc 2.34 or later |
+| `tonans-0.1.0-windows-x64.zip` | The `tonans` command, without a window, for 64-bit Windows |
+
+**Debian and Ubuntu.** Install the package, which also installs WebKitGTK if it is
+missing:
+
+```sh
+sudo apt install ./Tonans_0.1.0_amd64.deb
+```
+
+Tonans is then in your applications menu, and `tonans-desktop` starts it from a terminal.
+`sudo apt remove tonans` removes it.
+
+**Fedora.**
+
+```sh
+sudo dnf install ./Tonans-0.1.0-1.x86_64.rpm
+```
+
+Start it from the applications menu or with `tonans-desktop`. `sudo dnf remove tonans`
+removes it.
+
+**The `tonans` command on Linux.** Extract the tarball anywhere and run the binary in
+it. Nothing needs installing:
+
+```sh
+tar -xzf tonans-0.1.0-linux-x86_64.tar.gz
+./tonans-0.1.0-linux-x86_64/tonans --help
+./tonans-0.1.0-linux-x86_64/tonans run --project "Demo - Riverside Works"
+```
+
+**Windows.** The ZIP holds `Tonans.exe`, the `tonans` command; the desktop window is not
+in it. Unblock the ZIP (right-click, **Properties**, **Unblock**), extract it to a folder
+you own, and run `Tonans.exe` from a command prompt. Windows SmartScreen warns about an
+unsigned program; the `README.md` in the ZIP explains that and how to check the files
+against `SHA256SUMS.txt` before you run it.
+
+Uninstalling never touches your projects. They stay in the workspace folder, described in
+`docs/PRIVACY.md`, until you delete it.
 
 ## What it is
 
@@ -58,7 +111,7 @@ under the workspace the user selects.
 Tonans is a native window: `tonans-desktop` runs the loopback server in-process and
 shows the interface in a Tauri webview. Closing the window ends the application.
 
-On Linux, install it into your applications menu:
+To build and install it from this repository on Linux instead:
 
 ```sh
 scripts/install-desktop.sh              # builds a release, then installs under ~/.local
@@ -118,12 +171,17 @@ cargo +stable-x86_64-pc-windows-gnullvm clippy -p tonans-core -p tonans-app --al
 .\packaging\smoke.ps1
 ```
 
-These scripts build and verify a local release candidate of the `tonans` command. They
-do not publish, upload, install, or create a shortcut. The package does not contain the
-desktop window yet. A binary is published only after the integrated gates and the
-walkthrough pass against that exact package.
+These scripts build, check, and run the Windows package of the `tonans` command. They do
+not publish, upload, install, or create a shortcut. The Windows package does not contain
+the desktop window.
+
+The release workflow, `.github/workflows/release.yml`, runs those three scripts on
+Windows. On Ubuntu 22.04 it builds the desktop `.deb` and `.rpm` with the Tauri bundler
+and the `tonans` tarball, writes each package's third-party notices with cargo-about from
+`packaging/about.toml`, and runs every binary from its extracted package. A tag run drafts
+a release with all of them and `SHA256SUMS`.
 
 The interface's typeface is Barlow, under the SIL Open Font License, compiled into the
 binary from `crates/tonans-app/ui/fonts`.
 
-Support: `support@flintglade.com`.
+Support: `support@draconitic.com`.

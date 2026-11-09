@@ -64,9 +64,10 @@ redirect a write.
 
 ## Removing your data
 
-Delete the workspace folder and the program. On Linux, if you installed the desktop app,
-`scripts/install-desktop.sh --uninstall` removes the program, menu entry, and icons, and
-leaves the workspace for you to remove yourself. On Windows:
+Delete the workspace folder and the program. On Linux, `sudo apt remove tonans` or
+`sudo dnf remove tonans` removes the packaged desktop app, and
+`scripts/install-desktop.sh --uninstall` removes one installed from source. Both leave the
+workspace for you to remove yourself. On Windows:
 
 ```powershell
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Draconitic Labs\Tonans"

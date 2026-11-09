@@ -1,12 +1,61 @@
-# Release checklist - Tonans release candidate
+# Release checklist - Tonans
 
-**Status: no binary release yet.**
+The release gates for Tonans and their recorded results.
 
-The results below belong to the release-candidate archive built before Tonans became open
-source. Evidence belongs to the exact artifact being considered for release, so these gates
-must be rerun against the next package.
+## Version 0.1.0, 2026-11-08
 
-Verified 2026-07-13:
+The owner decided on 2026-11-08 to release 0.1.0 that night. **The walkthrough with real
+input has not been done on Windows.** It passed on Linux on 2026-11-04, against an earlier
+source revision; the record is under "Walkthrough" below.
+
+The release files are built by `.github/workflows/release.yml`. A tag run builds them again
+from the tag and lists their digests in the release's `SHA256SUMS`, so no package digest is
+recorded here: the files checked below are branch builds of the same source, not the
+published bytes.
+
+Gates run on the `release-0.1.0` branch at `2a32cd7`. Later commits change only documents and
+remove a temporary trigger from the release workflow.
+
+- **CI** (`ci.yml`, run 42540019421): formatting, strict Clippy over the workspace, the
+  workspace tests on Ubuntu 24.04 including the desktop shell's, the tests without the shell
+  on Windows (MSVC), the page's Node tests, a release build, `tonans --help`, and
+  `tonans-desktop --version`: passed on both systems.
+- **Dependency audit** (`security.yml`, `cargo audit --deny warnings` with the five
+  advisories below): passed, run 42540025354.
+- **CodeQL** (Rust and JavaScript): passed, run 42540025324.
+- **Release workflow, Windows job** (run 42540019408): `package.ps1` built
+  `tonans-0.1.0-windows-x64.zip` with rustc 1.99.1 on `stable-x86_64-pc-windows-gnullvm`,
+  the toolchain the script names, and llvm-mingw 20261020 (UCRT). It ships 26 third-party
+  crates and embeds 27 distinct licence texts. `verify-package.ps1` passed 15 of 15 checks
+  and `smoke.ps1` 12 of 12. Two checks in `verify-package.ps1` failed falsely on its first
+  run and were fixed: the mail-domain check read `@draconitic.comtext` from the executable's
+  string table as a foreign domain, and the NOTICES.md origin check compared only scheme and
+  host, so its exception for Barlow's copyright address could never apply.
+- **Release workflow, Linux job** (run 42540019408), on Ubuntu 22.04: cargo-about 0.9.2
+  wrote NOTICES.md for `tonans` and for `tonans-desktop`, each with the Barlow font licence,
+  and Tauri CLI 2.12.4 built `Tonans_0.1.0_amd64.deb` and `Tonans-0.1.0-1.x86_64.rpm`. Each
+  package was unpacked outside the checkout and its binary run with an empty environment:
+  - from the tarball, `tonans --version`, `--help`, and `tonans run` of the demo project.
+    The bundle passed `sha256sum -c`, and its model input hash `97029af07baaf314...` and
+    results hash `b9512228beb1b6a1...` are the ones in the walkthrough record below;
+  - `tonans-desktop --version` and `--help` from the .deb, and `--version` from the .rpm;
+  - neither binary contains a `/home/runner` path, the menu entry carries
+    `StartupWMClass=com.draconiticlabs.tonans`, and LICENSE and NOTICES.md are in
+    `/usr/share/doc/tonans/`;
+  - the .deb then installed with apt, and the installed `tonans-desktop --version` ran.
+- **Local, Fedora 44**: `cargo test -p tonans-core -p tonans-app --all-targets --locked`
+  passed, 313 tests. These crates are unchanged since that run.
+
+Not run for this release:
+
+- the walkthrough on Windows, as above, and of this exact source on Linux;
+- a fresh-context review of the final diff and packages;
+- the CycloneDX JSON Schema validation recorded for 2026-07-13.
+
+### Earlier record, 2026-07-13
+
+These results belong to the release-candidate archive built before Tonans became open
+source.
 
 - archive SHA-256: `da7809d611a517fa0081ea1ac42f50d5736d11fddc58a81d7b872bb3fdf8a3d8`;
 - runtime: `Tonans 0.1.0 (model 1.1.1, schema v1)`;
@@ -24,9 +73,7 @@ Use the stable GNU/LLVM Rust target and place Cargo before llvm-mingw:
 $env:PATH="$env:USERPROFILE\.cargo\bin;<llvm-mingw>\bin;$env:PATH"
 ```
 
-## Pending before a binary release
-
-### Walkthrough
+## Walkthrough
 
 Launch the final build in its native window and drive the actual interface with real
 input, never a browser:
@@ -139,10 +186,10 @@ Not covered by this record:
   exercised against a scratch home folder.
 - HiDPI, assistive technology, and keyboard-only use were not walked through.
 
-Rerun the walkthrough against the staged Windows package and record its digest before
-publishing a binary.
+The Windows walkthrough is still open. 0.1.0 was released without it by the owner's
+decision of 2026-11-08.
 
-### Final integrated gate rerun
+## Final integrated gate rerun
 
 After the release branches are combined, rerun every command below against the exact
 source revision used to make the staged package. This includes a fresh-context review
@@ -258,7 +305,7 @@ The package build must:
 ```
 
 The verifier must independently check the exact allowlist, Windows version metadata,
-Flintglade-only public identity, absence of secrets and build paths, localhost-only
+Draconitic Labs-only public identity, absence of secrets and build paths, localhost-only
 network boundary, checksums, SBOM structure, licence/notice coverage, declared signing
 status, and executable runtime imports. It must fail on missing **or extra** files.
 
@@ -291,17 +338,19 @@ the final review.
 
 ## Signing status
 
-The release candidate is explicitly unsigned. Windows SmartScreen may warn that the
+Release 0.1.0 is unsigned, on every platform. Windows SmartScreen may warn that the
 publisher cannot be confirmed. The archive sidecar and internal checksums provide
 integrity evidence, not publisher authentication.
 
 ## Final release sequence
 
-1. Verify the archive digest and extract it.
-2. Complete the walkthrough above using the exact staged package.
-3. Confirm the boundary text under Help, assumptions, units, warnings, and exports are readable.
-4. Record the package digest and outcome.
-5. Keep the binary unpublished until every final integrated gate and the walkthrough
-   are closed.
+1. Merge the release branch, and run the release workflow by hand on `main` if anything
+   changed since its last green run.
+2. Tag the merge commit `v<version>` and push the tag. The workflow builds every package
+   again, repeats the checks above, and creates a draft release with the files and
+   `SHA256SUMS`.
+3. Download the draft's files, check them against `SHA256SUMS`, and run them.
+4. Complete the walkthrough using those files, or record the decision to release without it.
+5. Publish the draft.
 
-Support: `support@flintglade.com`
+Support: `support@draconitic.com`
