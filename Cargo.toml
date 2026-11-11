@@ -24,7 +24,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "serde"
 # times across DST transitions, which the importer must reject.
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 # Input-file, project, and artifact hashing for the provenance manifest.
-sha2 = "0.10"
+sha2 = "0.11"
 # Error enum boilerplate for the machine-coded error taxonomy.
 thiserror = "2.0"
 

@@ -38,7 +38,7 @@ pub fn opaque_id() -> String {
 
 fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0u8; N];
-    getrandom::getrandom(&mut bytes).map_err(|e| {
+    getrandom::fill(&mut bytes).map_err(|e| {
         Error::io(
             "reading from the operating system's random number generator",
             std::io::Error::other(e.to_string()),

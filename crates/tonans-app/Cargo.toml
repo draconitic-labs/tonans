@@ -25,11 +25,9 @@ chrono.workspace = true
 # The operating system's CSPRNG, for the one-launch bearer token. The only source of
 # randomness in the workspace; `tonans-core` has none at all.
 #
-# Pinned to 0.2 deliberately. 0.3 reaches Windows' CSPRNG through a `raw-dylib`
-# import, which cannot be built by the `windows-gnu` toolchain without a full MinGW
-# binutils installation. 0.2 uses an ordinary import library, which the toolchain
-# already ships. See docs/ARCHITECTURE.md.
-getrandom = "0.2"
+# OS entropy for launch tokens and opaque IDs. The Windows package supplies the
+# pinned LLVM-MinGW tools needed by this version's raw-dylib import.
+getrandom = "0.4"
 
 # There is no HTTP framework here, and that is deliberate. See `src/http.rs`: Axum
 # would bring Tokio, Mio, and `windows-sys`, which is around sixty crates into the
