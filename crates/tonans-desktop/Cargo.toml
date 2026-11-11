@@ -27,7 +27,7 @@ tauri = { version = "2", features = ["custom-protocol"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 
-# Already in the tree through GTK. Used for one call: naming the program after the app id.
+# Used on Linux to name the program after the app id through GLib's process API.
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = "0.22"
 
