@@ -291,7 +291,8 @@ try {
         if ($imports -contains 'libunwind.dll') { return 'libunwind.dll is dynamically imported' }
 
         $allowed = @(
-            'advapi32.dll', 'bcrypt.dll', 'crypt32.dll', 'gdi32.dll',
+            # ProcessPrng, used by getrandom 0.4, is supplied by Windows itself.
+            'advapi32.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'crypt32.dll', 'gdi32.dll',
             'kernel32.dll', 'msvcrt.dll', 'ntdll.dll', 'ole32.dll',
             'shell32.dll', 'user32.dll', 'userenv.dll', 'ws2_32.dll'
         )
