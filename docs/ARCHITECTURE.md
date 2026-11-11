@@ -150,10 +150,11 @@ the window for Windows with the default MSVC target, and it has not been tried w
 toolchain. `chrono` is built without its clock feature,
 and `unsafe_code` is forbidden workspace-wide.
 
-`getrandom` remains pinned to 0.2 because that version reaches the Windows CSPRNG
-through an import supported by the selected GNU/LLVM toolchain. The pin remains
-subject to the locked dependency audit; it is a compatibility decision, not an
-exception to the security gate.
+`getrandom` 0.4 supplies operating-system entropy through its `fill` API. Its
+Windows backend uses a raw-dylib import for `ProcessPrng`; release packaging
+installs the pinned LLVM-MinGW tools needed by the GNU/LLVM target. The MSVC
+desktop checks and GNU/LLVM package checks must both pass, along with the locked
+dependency audit.
 
 The Windows version resource is generated locally by the application build and
 compiled with `llvm-windres`.
